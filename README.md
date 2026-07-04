@@ -12,7 +12,7 @@
 
 The goal isn't to clone a fixed model library — it's *infinite species generation*: pick a species, tune its parameters, and get a unique, textured, wind-animated 3D plant you can drop into a scene or export to glTF.
 
-[![SeedThree — a procedurally generated white oak in a wind-animated meadow with an instanced forest ring, PBR terrain, and sky](docs/media/hero.png)](https://skyeshark.github.io/SeedThree/)
+[![SeedThree — a procedurally generated Joshua tree in the desert with the live control panel showing shape, foliage, and LOD parameters](docs/media/hero.png)](https://skyeshark.github.io/SeedThree/)
 
 > **Status: `v0.1.0-alpha`.** Ten species, full LOD + export pipeline, and a living scene are in — but it's early and rough in places. Expect sharp edges.
 
@@ -21,7 +21,7 @@ The goal isn't to clone a fixed model library — it's *infinite species generat
 - **Ten species across two biomes**
   - *Temperate:* White Oak · Red Maple · Tulip Poplar · Sweetgum · American Beech · Ponderosa Pine · Loblolly Pine · Douglas Fir
   - *Desert:* Joshua Tree · Saguaro
-- **Two generators.** A [Weber–Penn](https://citeseerx.ist.psu.edu/document?doi=1714b6567b32fcfa1a76a5f2472b90902147f8e5) parametric model for broadleaves & conifers, and a from-scratch dichotomous L-system for the desert succulents (merged-tube mesh, rib crests, areole spines).
+- **Two generators.** A Weber–Penn parametric model for broadleaves & conifers, and a from-scratch dichotomous L-system for the desert succulents (merged-tube mesh, rib crests, areole spines).
 - **Real morphology.** Each species' branch angles, taper, gnarl, and crown shape are dialed to reference photos, not generic defaults.
 - **Foliage as cards.** Base-anchored single-leaf and needle-spray cards with backlit translucency (Barré-Brisebois SSS), dome-normal canopy shading, and per-instance wind.
 - **LOD chain + impostors.** LOD0 full geometry → reduced-geometry LOD1 → baked branch-card LOD2 → a 2-plane billboard impostor, baked off-thread in a Web Worker so the viewer never stalls. Per-LOD density & branch-prune dials.
@@ -64,7 +64,7 @@ New plants are added by dropping in a **preset** and a small set of **generated 
 
 Export a species object and register it in `src/species/index.js` (import + add to the `SPECIES` map). **The preset chooses which of the two generators runs** — pick the one that matches the plant:
 
-**A) Broadleaves & conifers → [Weber–Penn](https://citeseerx.ist.psu.edu/document?doi=1714b6567b32fcfa1a76a5f2472b90902147f8e5) parametric model.** Copy the closest existing species (`white-oak.js` is the template; `pine.js` for conifers) and retune the parameters to reference photos.
+**A) Broadleaves & conifers → Weber–Penn parametric model.** Copy the closest existing species (`white-oak.js` is the template; `pine.js` for conifers) and retune the parameters to reference photos.
 
 ```js
 export const redcedar = {
