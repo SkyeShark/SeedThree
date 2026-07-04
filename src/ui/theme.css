@@ -1,0 +1,198 @@
+/* SeedThree UI theme — modern rounded forest panel, opaque, with the
+   "living sap veins" GPU shader (panel-fx.js) as its background. */
+
+:root {
+  --st-text: #e8eee4;
+  --st-dim: #a7bba3;
+  --st-green: #4e8f5a;   /* primary accent (temperate = forest green) */
+  --st-amber: #d9a441;
+  --st-radius: 14px;
+}
+
+/* Desert biome — the whole UI shifts from forest green to amber/sandstone.
+   main.js toggles body.biome-desert on species switch; every accent reads these
+   vars, so the panel border, slider fills, numbers and HUD retint in one place. */
+body.biome-desert {
+  --st-green: #c08a3a;   /* primary accent → warm amber */
+  --st-amber: #e6b24d;   /* highlight → brighter gold */
+  --st-dim: #c6b193;     /* muted labels → warm sand */
+  --st-text: #f0e8d8;
+}
+body.biome-desert .lil-gui {
+  --number-color: #e8c987;
+  --focus-color: rgba(230, 178, 77, 0.30);
+}
+
+/* ---------- lil-gui reskin (this lil-gui version uses lil-* classes) -------- */
+.lil-gui {
+  --background-color: transparent;
+  --title-background-color: transparent;
+  --widget-color: rgba(255, 255, 255, 0.07);
+  --hover-color: rgba(255, 255, 255, 0.12);
+  --focus-color: rgba(217, 164, 65, 0.28);
+  --number-color: #a8d5a2;
+  --string-color: #d9a441;
+  --font-family: 'Segoe UI', system-ui, sans-serif;
+  --font-size: 12px;
+  --text-color: var(--st-text);
+  --title-text-color: var(--st-text);
+}
+
+.lil-gui.lil-root {
+  position: fixed; /* keep lil-gui's top-right anchoring (relative dropped it
+                      into document flow, on top of the HUD) */
+  top: 12px;
+  right: 12px;
+  margin: 0;
+  border-radius: var(--st-radius);
+  background: #10160f; /* opaque — the coolness is the shader, not glass */
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  overflow: hidden auto;
+  max-height: calc(100vh - 24px);
+}
+
+/* living gradient border */
+.lil-gui.lil-root::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: var(--st-radius);
+  padding: 1.5px;
+  background: linear-gradient(140deg, var(--st-green), rgba(217, 164, 65, 0.65), var(--st-green));
+  background-size: 300% 300%;
+  animation: st-border-breathe 9s ease-in-out infinite;
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  z-index: 4;
+}
+@keyframes st-border-breathe {
+  0%, 100% { background-position: 0% 40%; }
+  50% { background-position: 100% 60%; }
+}
+
+/* living-sap-veins shader canvas (mounted by panel-fx.js) */
+.lil-gui.lil-root canvas.st-fx {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--st-radius);
+  z-index: 0;
+}
+
+/* readability scrim: calm dark over the content column, letting the veins
+   glow through mostly at the panel's edges */
+.lil-gui.lil-root::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: var(--st-radius);
+  /* Lighter scrim so the living-sap veins actually read through the content
+     column (was 0.88–0.92 — the veins only glowed at the very edges). Still dark
+     enough behind the widgets for legible text. */
+  background:
+    linear-gradient(180deg, rgba(13, 19, 12, 0.28) 0%, rgba(13, 19, 12, 0.64) 16%,
+      rgba(13, 19, 12, 0.70) 82%, rgba(13, 19, 12, 0.42) 100%);
+  pointer-events: none;
+  z-index: 1;
+}
+.lil-gui.lil-root > .lil-children,
+.lil-gui.lil-root > .st-brand { position: relative; z-index: 3; }
+
+.lil-gui .lil-title {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border-radius: 8px;
+}
+.lil-gui .lil-title:hover { background: rgba(255, 255, 255, 0.06); }
+
+.lil-gui.lil-root > .lil-children { padding: 4px 6px 10px; }
+.lil-gui:not(.lil-root) {
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+  margin: 3px 4px;
+}
+.lil-gui:not(.lil-root) > .lil-title { color: var(--st-dim); }
+.lil-gui.lil-closed > .lil-title { opacity: 0.85; }
+
+.lil-gui .lil-controller { border-radius: 8px; }
+.lil-gui .lil-controller:hover { background: rgba(255, 255, 255, 0.045); }
+.lil-gui .lil-controller .lil-name { color: var(--st-dim); }
+.lil-gui .lil-slider {
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.09);
+}
+.lil-gui .lil-fill { background: linear-gradient(90deg, var(--st-green), var(--st-amber)); }
+.lil-gui input, .lil-gui select {
+  border-radius: 6px !important;
+  background: rgba(0, 0, 0, 0.32);
+}
+.lil-gui .lil-function .lil-name {
+  color: var(--st-text);
+  font-weight: 600;
+}
+.lil-gui .lil-function:hover { background: rgba(217, 164, 65, 0.15); }
+
+/* branding header injected by controls.js */
+.st-brand {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px 8px;
+}
+.st-brand img.icon { width: 34px; height: 34px; }
+.st-brand img.wordmark { height: 26px; width: auto; max-width: 200px; }
+
+/* ---------- billboard-bake progress readout (matches the HUD) ---------- */
+#bake-progress {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-radius: var(--st-radius);
+  background: #10160f;
+  border: 1px solid rgba(120, 160, 120, 0.3);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  color: var(--st-text);
+  font: 12px/1.5 'Segoe UI', system-ui, sans-serif;
+  padding: 9px 13px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.25s;
+}
+#bake-progress .bake-label { color: var(--st-dim); letter-spacing: 0.02em; }
+#bake-progress .bake-track {
+  display: inline-block;
+  width: 66px;
+  height: 6px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.09);
+  overflow: hidden;
+}
+#bake-progress .bake-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--st-green), var(--st-amber)); /* same fill as the sliders → retints amber in desert */
+  transition: width 0.12s;
+}
+
+/* ---------- HUD to match ---------- */
+#hud {
+  border-radius: var(--st-radius);
+  background: #10160f;
+  border: 1px solid rgba(120, 160, 120, 0.3);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  color: var(--st-text);
+  padding: 10px 14px !important;
+  font-family: 'Segoe UI', system-ui, sans-serif !important;
+  line-height: 1.5;
+}

@@ -1,0 +1,18 @@
+node_modules/
+dist/
+tmp/
+*.log
+.DS_Store
+# Codex drops generated images here by default before we move them into assets/
+.codex-tmp/
+
+# dev scratch / experiments — not part of the release
+work_tmp/
+output/
+mats.js
+meshsss.js
+nm.js
+tsl.js
+twg.js
+sss.html
+tmp_generate_leaf_normal.py
