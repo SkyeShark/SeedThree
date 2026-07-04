@@ -6,7 +6,7 @@
 
 **Open-source procedural tree & plant generator for the web, built on Three.js (WebGPU).**
 
-**▶ [Live demo](https://skyeshark.github.io/SeedThree/)** &nbsp;(WebGPU-capable browser required — Chrome/Edge) &nbsp;·&nbsp; [Open in StackBlitz](https://stackblitz.com/github/SkyeShark/SeedThree)
+**▶ [Live demo](https://skyeshark.github.io/SeedThree/)** &nbsp;(WebGPU-capable browser required — Chrome/Edge)
 
 </div>
 
@@ -21,7 +21,7 @@ The goal isn't to clone a fixed model library — it's *infinite species generat
 - **Ten species across two biomes**
   - *Temperate:* White Oak · Red Maple · Tulip Poplar · Sweetgum · American Beech · Ponderosa Pine · Loblolly Pine · Douglas Fir
   - *Desert:* Joshua Tree · Saguaro
-- **Two generators.** A Weber–Penn parametric model for broadleaves & conifers, and a from-scratch dichotomous L-system for the desert succulents (merged-tube mesh, rib crests, areole spines).
+- **Two generators.** A [Weber–Penn](https://courses.cs.duke.edu/fall02/cps124/resources/p119-weber.pdf) parametric model for broadleaves & conifers, and a from-scratch dichotomous [L-system](https://en.wikipedia.org/wiki/L-system) for the desert succulents (merged-tube mesh, rib crests, areole spines).
 - **Real morphology.** Each species' branch angles, taper, gnarl, and crown shape are dialed to reference photos, not generic defaults.
 - **Foliage as cards.** Base-anchored single-leaf and needle-spray cards with backlit translucency (Barré-Brisebois SSS), dome-normal canopy shading, and per-instance wind.
 - **LOD chain + impostors.** LOD0 full geometry → reduced-geometry LOD1 → baked branch-card LOD2 → a 2-plane billboard impostor, baked off-thread in a Web Worker so the viewer never stalls. Per-LOD density & branch-prune dials.
@@ -64,7 +64,7 @@ New plants are added by dropping in a **preset** and a small set of **generated 
 
 Export a species object and register it in `src/species/index.js` (import + add to the `SPECIES` map). **The preset chooses which of the two generators runs** — pick the one that matches the plant:
 
-**A) Broadleaves & conifers → Weber–Penn parametric model.** Copy the closest existing species (`white-oak.js` is the template; `pine.js` for conifers) and retune the parameters to reference photos.
+**A) Broadleaves & conifers → [Weber–Penn](https://courses.cs.duke.edu/fall02/cps124/resources/p119-weber.pdf) parametric model.** Copy the closest existing species (`white-oak.js` is the template; `pine.js` for conifers) and retune the parameters to reference photos.
 
 ```js
 export const redcedar = {
@@ -87,7 +87,7 @@ export const redcedar = {
 
 Rules of thumb: `length[childLevel]` is a **fraction of the parent's** length (small terminal values → short leafy twigs, not bare whips); high `downAngle` + `attractionUp: 0` reads as a conifer, up-swept angles as a broadleaf; `shape` sets the crown silhouette.
 
-**B) Desert succulents (saguaro, Joshua tree, yuccas) → dichotomous L-system (Lindenmayer).** These aren't branch-and-leaf trees, so they run a completely different generator: set `foliageType: 'rosette'` (or `cactus: true`) and describe the plant as an **L-system** — a branching grammar of fork rules (probability, depth, split angle), segment length/taper, rib count, arm gating, and rosette-leaf or areole-spine placement — which builds a single merged-tube mesh. Copy `saguaro.js` / `joshua-tree.js`; the grammar, parameters, and mesh construction are documented in [`docs/dichotomous-generator.md`](docs/dichotomous-generator.md).
+**B) Desert succulents (saguaro, Joshua tree, yuccas) → dichotomous [L-system](https://en.wikipedia.org/wiki/L-system) (Lindenmayer).** These aren't branch-and-leaf trees, so they run a completely different generator: set `foliageType: 'rosette'` (or `cactus: true`) and describe the plant as an **L-system** — a branching grammar of fork rules (probability, depth, split angle), segment length/taper, rib count, arm gating, and rosette-leaf or areole-spine placement — which builds a single merged-tube mesh. Copy `saguaro.js` / `joshua-tree.js`; the grammar, parameters, and mesh construction are documented in [`docs/dichotomous-generator.md`](docs/dichotomous-generator.md).
 
 ### 2. Generate the textures (image model → PBR maps)
 
