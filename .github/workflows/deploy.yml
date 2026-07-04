@@ -29,6 +29,8 @@ jobs:
       # Project Pages sites are served under /<repo>/, so build with that base.
       - run: npx vite build --base=/SeedThree/
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
