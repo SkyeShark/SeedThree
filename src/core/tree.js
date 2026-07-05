@@ -28,19 +28,28 @@ function buildDichotomousTree(species, seed, assets, lodOpts, reuse = null) {
   // built from instanced cones — so coneRadialSegs (cone resolution) is the real LOD
   // budget lever, not the bark radialSegs. Coarsening cones 12→8→4 lands LOD1≈40% /
   // LOD2≈15% of LOD0 tris while keeping the rosette COUNT (silhouette) intact.
+  // LOD sliders wired to the rosette/cactus path (regular, non-mobile):
+  //  • meshQuality  → global cone/rib DETAIL multiplier (the real tri lever — cones
+  //    are ~93% of a dichotomous plant's triangles, so coneRadialSegs is the budget).
+  //  • lod1/lod2Density → per-LOD ROSETTE density (Joshua/yucca) and SPINE density
+  //    (saguaro), MULTIPLYING the defaults so density=1 keeps the current look.
+  //  • lod1/lod2Dist → switch distances. (budget%/prune don't apply — no branch cards.)
+  const q = Math.max(0.35, lodOpts.meshQuality ?? 1);
+  const d1 = lodOpts.lod1Density ?? 1, d2 = lodOpts.lod2Density ?? 1;
+  const cs = (base) => Math.max(3, Math.round(base * q)); // per-LOD cone detail
   const levels = [
-    { name: 'LOD0', distance: 0, radialSegs: species.params.radialSegs ?? 10, rosetteDensity: 1, coneRadialSegs: 12 },
-    { name: 'LOD1', distance: lodOpts.lod1Dist ?? 35, radialSegs: 6, rosetteDensity: 0.6, coneRadialSegs: 8 },
-    { name: 'LOD2', distance: lodOpts.lod2Dist ?? 80, radialSegs: 5, rosetteDensity: 0.35, coneRadialSegs: 4 },
+    { name: 'LOD0', distance: 0, radialSegs: species.params.radialSegs ?? 10, rosetteDensity: 1, coneRadialSegs: cs(12) },
+    { name: 'LOD1', distance: lodOpts.lod1Dist ?? 35, radialSegs: 6, rosetteDensity: 0.6 * d1, coneRadialSegs: cs(8) },
+    { name: 'LOD2', distance: lodOpts.lod2Dist ?? 80, radialSegs: 5, rosetteDensity: 0.35 * d2, coneRadialSegs: cs(4) },
   ];
   if (species.cactus) {
     // A fluted column needs ≥2 radial samples PER RIB or the ribs alias into lumps
     // that read as broken/missing arms with garbage UVs. Keep the ribs resolved at
     // LOD0/1, then drop the fluting entirely (ribDepth 0 = smooth column) at the
-    // far LOD where the ribs aren't readable anyway.
+    // far LOD where the ribs aren't readable anyway. The density sliders thin spines.
     const rc = species.params.ribCount ?? 16;
     levels[0].radialSegs = rc * 4; levels[0].ribDepth = species.params.ribDepth; levels[0].spineDensity = 1;
-    levels[1].radialSegs = rc * 2; levels[1].ribDepth = species.params.ribDepth * 0.85; levels[1].spineDensity = 0.5;
+    levels[1].radialSegs = rc * 2; levels[1].ribDepth = species.params.ribDepth * 0.85; levels[1].spineDensity = 0.5 * d1;
     levels[2].radialSegs = Math.max(14, rc); levels[2].ribDepth = 0; levels[2].spineDensity = 0; // ribs gone at range → no spines
   }
 

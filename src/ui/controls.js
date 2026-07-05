@@ -151,13 +151,21 @@ export function buildGUI(opts) {
   let cMobile, cMeshQ, cLod1Pct, cLod2Pct, cLod1Den, cLod2Den, cLod1Prn, cLod2Prn;
   function applyMobileUI() {
     if (!cMobile) return;
-    const isRosette = speciesMap[state.speciesKey]?.foliageType === 'rosette';
-    cMobile.show(!isRosette);
+    const sp = speciesMap[state.speciesKey];
+    const isRosette = sp?.foliageType === 'rosette';
+    const isCactus = isRosette && !!sp?.cactus;   // saguaro: spines, fluted ribs
+    cMobile.show(!isRosette);                      // (mobile hybrid for rosettes lands next)
     const m = !!optState?.mobileTarget && !isRosette;
-    cLod1Pct.show(!m); cLod2Pct.show(!m);
-    cMeshQ.name(m ? 'Twig / skeleton quality' : 'LOD0 mesh quality');
-    cLod1Den.name(m ? 'LOD1 card density' : 'LOD1 foliage density');
-    cLod2Den.name(m ? 'LOD2 card density' : 'LOD2 foliage density');
+    // ROSETTE path (Joshua/yucca/saguaro): budget% and prune don't apply (no branch
+    // cards / no twig skeleton to prune), so hide them; density → rosette/spine
+    // density, quality → cone/rib detail. Temperate path keeps its card/budget dials.
+    cLod1Pct.show(!m && !isRosette); cLod2Pct.show(!m && !isRosette);
+    cLod1Prn.show(!m && !isRosette); cLod2Prn.show(!m && !isRosette);
+    cMeshQ.name(isRosette ? (isCactus ? 'Rib & spine detail' : 'Rosette cone detail')
+                          : (m ? 'Twig / skeleton quality' : 'LOD0 mesh quality'));
+    const denLabel = isCactus ? 'spine density' : isRosette ? 'rosette density' : m ? 'card density' : 'foliage density';
+    cLod1Den.name(`LOD1 ${denLabel}`);
+    cLod2Den.name(`LOD2 ${denLabel}`);
     cLod1Prn.name(m ? 'LOD1 twig prune' : 'LOD1 branch prune');
     cLod2Prn.name(m ? 'LOD2 twig prune' : 'LOD2 branch prune');
   }

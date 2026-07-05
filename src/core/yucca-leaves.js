@@ -449,9 +449,21 @@ export function buildYuccaFoliage(terminalStems, cfg, rng, material, allStems = 
       mesh = new InstancedMesh(geo, material, CAP);
       mesh.name = `cone${ci}`;
       mesh.userData.shareMaterial = true;
+      mesh.userData.coneRSeg = coneRSeg;
       mesh.castShadow = true; mesh.receiveShadow = true;
       coneMeshes[ci] = mesh;
       group.add(mesh);
+    } else if (mesh.userData.coneRSeg !== coneRSeg) {
+      // Cone DETAIL (meshQuality / cone-detail slider) changed on a live reuse: swap in
+      // the new-resolution base geometry (per-vertex position/uv/normal/index only). The
+      // CAP-sized instanced attrs are resolution-independent and stay. Same attribute
+      // layout → same pipeline, so it re-uploads buffers without the recompile freeze.
+      const src = coneGeo(ci, coneRSeg);
+      mesh.geometry.setAttribute('position', src.getAttribute('position').clone());
+      mesh.geometry.setAttribute('uv', src.getAttribute('uv').clone());
+      mesh.geometry.setAttribute('normal', src.getAttribute('normal').clone());
+      mesh.geometry.setIndex(src.getIndex().clone());
+      mesh.userData.coneRSeg = coneRSeg;
     }
     const geo = mesh.geometry;
     const windVec = geo.getAttribute('aWindVec').array;
