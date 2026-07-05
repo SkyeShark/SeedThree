@@ -138,7 +138,7 @@ docs/          spec notes + media
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE) ©
 
 By SkyeShark (Utah Teapot) and Claudes.
 
