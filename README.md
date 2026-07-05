@@ -6,7 +6,7 @@
 
 **Open-source procedural tree & plant generator for the web, built on Three.js (WebGPU).**
 
-**▶ [Live demo](https://skyeshark.github.io/SeedThree/)** &nbsp;(WebGPU-capable browser required — Chrome/Edge)
+**▶ [Use Live NOW!](https://skyeshark.github.io/SeedThree/)** &nbsp;(WebGPU-capable browser required — Chrome/Edge)
 
 </div>
 
