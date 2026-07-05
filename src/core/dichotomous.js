@@ -35,6 +35,8 @@ const DEFAULTS = {
   curlUp: 0.35,           // tropism toward vertical per segment (keeps some spread)
   armBend: 16,            // programmatic elbow curve along each segment (deg)
   gnarliness: 12,         // random per-segment direction jitter (deg)
+  continuationKink: 8,    // how hard a single-bud continuation "veers" at the dead node (deg) — real Joshua stalks kink 10-20°; saguaro keeps it low/straight
+
   forkRadiusKeep: 0.86,   // arms stay nearly as thick as the trunk per fork
   forkBaseScale: 1.0,     // arm BASE-ring radius as a fraction of the parent (｜1 = flare to full trunk width; <1 necks the arm in so its tilted base tucks INSIDE the trunk instead of poking out the sides at the crotch)
   trunkRadius: 0.16,      // base trunk radius (m)
@@ -243,7 +245,9 @@ export function generateDichotomous(userParams, rng) {
     // run with a touch of jitter/curl. Used when the column simply climbs.
     const continueMainAxis = () => {
       let cdir = endDir.clone();
-      cdir.applyAxisAngle(perp(cdir), (rng.vary(0, 8) * Math.PI) / 180).normalize();
+      // A dead flowering node redirects growth into a new stem that VEERS off at an
+      // angle — not a smooth curve. continuationKink sets that elbow (Joshua ~16°).
+      cdir.applyAxisAngle(perp(cdir), (rng.vary(0, p.continuationKink ?? 8) * Math.PI) / 180).normalize();
       cdir = repelDir(endPos, tropism(cdir, p.curlUp * 0.4), length);
       stem.children.push(grow(endPos, cdir, endRadius * 0.98, length, depth - 1, level, windTip, endRadius, false));
     };
@@ -394,10 +398,16 @@ export function buildMergedMesh(stems, params, targetGeo = null) {
   // on the ridge peaks. Only collected when the cross-section is fluted.
   const crestAnchors = [];
   const collectCrests = p.ribCount > 0 && p.ribDepth > 0;
+  const P = out.pos;
+  const dsq = (i, k) => { const a3 = i * 3, b3 = k * 3; const dx = P[a3] - P[b3], dy = P[a3 + 1] - P[b3 + 1], dz = P[a3 + 2] - P[b3 + 2]; return dx * dx + dy * dy + dz * dz; };
   const stitch = (a, b) => { // stitch two rings by base vertex index
     for (let j = 0; j < seg; j++) {
       const a0 = a + j, a1 = a + j + 1, b0 = b + j, b1 = b + j + 1;
-      out.idx.push(a0, b0, a1, a1, b0, b1);
+      // Split the quad along its SHORTER diagonal (a1–b0 vs a0–b1). On a twisted or
+      // forked quad the fixed split can show a crease/bowtie; picking the short one
+      // keeps the two triangles well-shaped (same outward winding either way).
+      if (dsq(a1, b0) <= dsq(a0, b1)) out.idx.push(a0, b0, a1, a1, b0, b1);
+      else out.idx.push(a0, b0, b1, a0, b1, a1);
     }
   };
 

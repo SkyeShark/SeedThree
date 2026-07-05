@@ -56,6 +56,7 @@ export const joshuaTree = {
     curlUp: 0.28,          // less upward pull → arms spread wider & the tree sits lower
     armBend: 8,            // gentle elbow (user default)
     gnarliness: 12,
+    continuationKink: 9,   // gentle veer at the dead node — enough to read as a real elbow, not so hard it exposes frond centres at the segment junction (the skirt cones can't hide a big veer)
     forkRadiusKeep: 0.86,  // arms stay nearly trunk-thick
     trunkRadius: 0.17,
     radialSegs: 10,

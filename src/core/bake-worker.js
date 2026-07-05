@@ -41,7 +41,8 @@ self.onmessage = async (e) => {
       const buildMat = (kind /*, side */) => {
         if (kind === 'bark') return makeBarkMaterial(assets);
         if (kind === 'spine') return makeSpineMaterial(assets);
-        if (kind === 'rosette') return makeYuccaMaterial(assets);
+        if (kind === 'rosette') return makeYuccaMaterial(assets).material; // returns { material, tints… } — bake needs the material
+
         const built = makeFoliageMaterial(assets, { ...cfg, mode: 'clusters' });
         if (built.centerUniform) built.centerUniform.value.copy(center);
         return built.material;

@@ -23,6 +23,7 @@ import { texture, uv, attribute, mix, vec3, vec4, uniform, dot, float } from 'th
 import { rosetteWindPosition, WIND_DIR } from './wind.js';
 
 const Y = new Vector3(0, 1, 0);
+const GOLDEN = Math.PI * (3 - Math.sqrt(5)); // 137.5° — the phyllotaxis spiral step
 
 // A STRAIGHT tapered cone shell. Apex at the arm tip (texture center), flaring
 // straight out to a rim at half-angle `open`. open<90 = upward cone, 90 = flat
@@ -98,6 +99,9 @@ const SKIRT = Array.from({ length: SKIRT_BANDS }, (_, b) => {
   // clear the arm and stay visible, tightening a bit lower down. (Too tight,
   // >160°, collapses the radial spread below the arm radius → spikes hide
   // inside the tube.)
+  // Moderate downward curl (bend 20°→54°). (Cranking bend higher curled the lowest
+  // cones back INTO the bark — the flush "thatch" look is better achieved by the
+  // rail-frame fix that hugs the true surface than by over-bending here.)
   return { open: 132 + 26 * f, bend: 20 + 34 * f, lseg: 4 + Math.round(f), skirt: true };
 });
 const CROWN_N = CROWN.length;
@@ -239,11 +243,13 @@ export function buildYuccaFoliage(terminalStems, cfg, rng, material, allStems = 
   const SKIRT_UPSHIFT = 0.06;
 
   const rpTail = { pos: new Vector3(), quat: new Quaternion(), wind: 0.5, total: 0, radius: 0.1 };
-  const emit = (ci, pos, quat, wind, len, age, spin = 0, yScale = 1, windTail = null) => {
-    // random roll + a deterministic `spin` that increases going down the arm,
-    // so the radial blade textures on stacked cones are never parallel.
+  const emit = (ci, pos, quat, wind, len, age, spin = 0, yScale = 1, windTail = null, rollJit = Math.PI * 2) => {
+    // `spin` (a deterministic base roll) + a random jitter of width `rollJit`.
+    // CROWN cones pass a golden-angle-stepped spin with a SMALL rollJit so their
+    // blade circles interleave in a true non-overlapping phyllotaxis spiral; the
+    // SKIRT keeps the full-random default (2π) for natural drape variety.
     // yScale compresses ONLY the vertical (hang) axis — radial spread is kept.
-    qRoll.setFromAxisAngle(Y, rng.range(0, Math.PI * 2) + spin);
+    qRoll.setFromAxisAngle(Y, spin + rng.range(0, rollJit));
     q.copy(quat).multiply(qRoll);
     // windTail = branch wind weight at the branch point the cone RIM hangs over
     // (down the drape). Crown cones don't drape → tail == head (no taper).
@@ -270,9 +276,12 @@ export function buildYuccaFoliage(terminalStems, cfg, rng, material, allStems = 
     for (let ci = 0; ci < CROWN_N; ci++) {
       const lm = CONES[ci].lenMul, ag = CONES[ci].age;
       for (let d = 0; d < crownCopies; d++) {
+        // golden-angle spiral: each successive crown layer (and the 2nd interleaved
+        // copy) is offset by 137.5° so blades pack without overlapping, + a small
+        // jitter so it doesn't read mechanically perfect.
         emit(ci, rp.pos, rp.quat, rp.wind,
           c.leafLen * lm * (1 + rng.vary(0, c.leafLenVar)),
-          ag + rng.vary(0, 0.04), ci * 0.8 + d * 1.7);
+          ag + rng.vary(0, 0.04), ci * GOLDEN + d * GOLDEN * 0.5, 1, null, 0.5);
       }
     }
   }
@@ -307,10 +316,15 @@ export function buildYuccaFoliage(terminalStems, cfg, rng, material, allStems = 
     if (isTrunk && !trunkFork && !babyTree) continue; // bare lower trunk shows bark
     frameAt(stem, 0, rp);
     const total = rp.total;
-    // Terminal arms: start just under the green crown. Structural (non-terminal)
-    // arms carry NO rosette, so their thatch starts right AT their tip (the fork
-    // crotch) so the junction is covered.
-    const start = stem.terminal ? 0.12 : 0.0;
+    // Where this stem's skirt starts (distance back from its tip):
+    //  • terminal arm → 0.12 (just under the green crown).
+    //  • CONTINUATION parent (one child of the SAME level) → 0.12 too: its tip is a
+    //    smooth segment junction that the continuing child already drapes down over,
+    //    so starting a cone AT the tip would stack a SECOND center-point there — the
+    //    doubled frond-centre that a hard veer pulls apart and exposes. Skip it.
+    //  • FORK parent → 0.0: the diverging arms leave the crotch bare, so cover it.
+    const isContPar = stem.children && stem.children.length === 1 && stem.children[0].level === stem.level;
+    const start = (stem.terminal || isContPar) ? 0.12 : 0.0;
     // trunk-fork: only the top ~0.45 m (near the crotch) is skirted.
     const end = trunkFork ? Math.min(total * 0.99, 0.45) : total * 0.99;
     for (let back = start; back < end; back += step) {
@@ -353,16 +367,22 @@ export function buildYuccaFoliage(terminalStems, cfg, rng, material, allStems = 
       const yMin = coneYMin(CROWN_N + band);
       const armLeft = total - back;
       let yScale = 1;
-      // Arms AND continuation runs (every non-trunk stem): cap the hang so the rim
-      // reaches the stem's base but never PAST it. Previously only real forks were
-      // capped; a CONTINUATION that drives a bend/curve was left uncapped, so on a
-      // near-horizontal curving branch it flung its skirt straight down the tangent
-      // past the branch end (the horizontal overshoot). This covers that edge case.
-      if (!isTrunk) yScale = Math.min(1, armLeft / (yMin * coneLen));
-      else if (trunkFork) yScale = Math.min(1, 0.5 / (yMin * coneLen)); // forking trunk crotch fill
-      // baby trunk: full drape near the crown, tapering to nothing at the bare line.
+      // NO per-base taper on arms/continuations anymore. The old armLeft cap (make the
+      // hang stop AT the base) shaved EVERY stem's base, which — combined with the next
+      // stem starting below its own tip — is what left the SEGMENT JUNCTIONS and FORK
+      // CROTCHES bare. It existed to stop a long drape spearing past the base, but the
+      // realistic-length cap below already bounds every cone to ~¼ m, so a base cone can
+      // only drape that short distance into the junction/crotch — which FILLS it instead
+      // of baring it. The trunk keeps its special caps (bare lower trunk / baby).
+      if (trunkFork) yScale = Math.min(1, 0.5 / (yMin * coneLen)); // forking trunk crotch fill
       if (babyTree && isTrunk) yScale = Math.min(yScale, Math.max(0, rp.pos.y - babyBareY) / (yMin * coneLen));
-      if (yScale < 0.12) continue; // drop the vanishing sliver at the base
+      // Cap the drape to a realistic dead-leaf length (~½ the rosette radius) so no
+      // single cone's STRAIGHT hang spans the branch's CURVE. A long drape on a
+      // curving/thick lowest arm cuts straight through the tube where the branch
+      // bends away beneath it — the "skirt clips through the segment, wrong shape"
+      // bug. The dense thatchStep overlap builds the continuous sleeve that follows
+      // the bend instead (applied AFTER the base-overhang drop so it never forces one).
+      yScale = Math.min(yScale, (c.leafLen * 0.5) / (yMin * coneLen));
       // tail weight: the branch's wind weight one drape-length further toward the
       // base (increasing `back`), so the cone's rim sways to match the bark it
       // hangs over instead of riding the anchor's full throw.
