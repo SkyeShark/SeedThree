@@ -1,12 +1,12 @@
 // Art-director guide image: overlay vertical guide lines on the TextureCan saguaro
-// flesh marking the rib-crest columns where the areole/spine holes must land.
+// bark marking the rib-crest columns where the areole/spine holes must land.
 // The mesh locks uScale=4, uPhase=0.125 → crests at U = 0.125,0.375,0.625,0.875.
-// Usage: node scripts/texture/make-flesh-guide.mjs <src_albedo> <out.png>
+// Usage: node scripts/texture/make-bark-guide.mjs <src_albedo> <out.png>
 import sharp from 'sharp';
 
 const SRC = process.argv[2] || 'assets/bark/saguaro_skin_albedo.png';
 const OUT = process.argv[3];
-if (!OUT) { console.error('usage: make-flesh-guide.mjs <src> <out.png>'); process.exit(2); }
+if (!OUT) { console.error('usage: make-bark-guide.mjs <src> <out.png>'); process.exit(2); }
 
 const { data, info } = await sharp(SRC).resize(1024, 1024, { fit: 'fill' }).removeAlpha().raw().toBuffer({ resolveWithObject: true });
 const W = info.width, H = info.height, C = info.channels;

@@ -10,7 +10,7 @@
 //     below the base (like impostor.js's bent-normal cards), so the flat cross reads
 //     as a rounded 3-D spine tuft instead of a flat decal, and the two planes agree
 //     where they intersect (no shading seam).
-//   - EMBEDDED HALFWAY: the card base is sunk ~embed·H into the flesh so there's no
+//   - EMBEDDED HALFWAY: the card base is sunk ~embed·H into the bark so there's no
 //     floating gap or hard bottom edge — the areole appears to grow OUT of the skin.
 //   - PLACEMENT: seated on the EXACT rib-crest vertices (dichotomous.js hands us the
 //     crest frame in geometry.userData.ribCrests), so buttons + spines land dead on
@@ -18,7 +18,7 @@
 //
 // Wind: a plain (non-instanced) Mesh whose positionNode is barkWindPosition() with
 // per-vertex aWind + aStemCenter copied from the anchor ring — so each cluster sways
-// byte-identically to the flesh it grows from (no detachment on arm tips). The whole
+// byte-identically to the bark it grows from (no detachment on arm tips). The whole
 // card shares one anchor weight/phase → it rides along rigidly, which is right for a
 // stiff spine cluster.
 
@@ -60,14 +60,14 @@ export function makeSpineMaterial(assets, sunLight = null) {
   mat.thicknessPowerNode = uniform(5.0);
   mat.thicknessScaleNode = uniform(2.5);
   mat.userData.gltfDiffuseTransmission = { factor: 1.0, color: SPINE_TRANSMIT, map: assets.leafTranslucency ?? null };
-  mat.positionNode = barkWindPosition(); // sway with the flesh (aWind + aStemCenter)
+  mat.positionNode = barkWindPosition(); // sway with the bark (aWind + aStemCenter)
   return mat;
 }
 
 const DEFAULTS = {
   size: 0.13,       // spine-card height (m) — a few cm of spine, scene-scaled
   widthFrac: 0.85,  // card width as a fraction of height
-  embed: 0.45,      // fraction of the card sunk into the flesh (halfway-ish)
+  embed: 0.45,      // fraction of the card sunk into the bark (halfway-ish)
   sizeVar: 0.25,    // per-areole size jitter
   density: 1,       // LOD dial: fraction of crest anchors kept
   splay: 1.0,       // bent-normal fan strength
@@ -129,9 +129,9 @@ export function buildCactusSpines(crestAnchors, cfg, rng, material, reuseMesh = 
     _t1.normalize();
     _t2.crossVectors(N, _t1).normalize();
     const sc = 1 + rng.vary(0, c.sizeVar);
-    // On a THIN stem (arm tips), the embed depth can exceed the flesh radius and
+    // On a THIN stem (arm tips), the embed depth can exceed the bark radius and
     // the card base would poke out the far side through the axis. Push the whole
-    // card OUT along the normal so its base stays inside the flesh, not past it.
+    // card OUT along the normal so its base stays inside the bark, not past it.
     const push = Math.max(0, H * c.embed * sc - a.radius);
     const P = a.pos.clone().addScaledVector(N, push); P._c = a.center; // stash centerline for wind phase
     emitPlane(P, N, _t1, a.wind, sc);

@@ -103,7 +103,7 @@ function buildDichotomousTree(species, seed, assets, lodOpts, reuse = null) {
 
     // Cactus spines: crossed alpha-card areoles marching down every rib crest. The
     // crest anchors come from the bark geometry we just (re)built at THIS LOD's rib
-    // resolution, so they always match the flesh. Rewritten in place on reuse.
+    // resolution, so they always match the bark. Rewritten in place on reuse.
     if (species.cactus && assets.spineMat) {
       const srng = new Rng(`${species.name}:${seed}:spines${i}`);
       const anchors = branches.geometry.userData.ribCrests || [];
@@ -158,7 +158,7 @@ export function makeBarkMaterial(assets = {}) {
   return mat;
 }
 
-// Saguaro flesh — a CLEAN base skin (Codex "undamaged" variant) with real photo
+// Saguaro bark — a CLEAN base skin (Codex "undamaged" variant) with real photo
 // damage (scars/blotches) blended IN only where a low-frequency, WORLD-space noise
 // mask says so. Two wins from one trick:
 //   • On a single tall column the damage no longer tiles vertically (the 1K damage
@@ -171,9 +171,9 @@ export function makeBarkMaterial(assets = {}) {
 // texel. Normal uses the clean map throughout (its scar bumps tiled too). The
 // `damage` uniform (0 pristine … 1 heavy) is the user dial; `seed` offsets the
 // noise so successive generations differ. Falls back to plain bark if no clean set.
-export function makeCactusFleshMaterial(assets = {}) {
-  if (!assets.fleshCleanAlbedo || !assets.barkTexture) return makeBarkMaterial(assets);
-  const damage = uniform(assets.fleshDamage ?? 0.35);
+export function makeCactusBarkMaterial(assets = {}) {
+  if (!assets.barkCleanAlbedo || !assets.barkTexture) return makeBarkMaterial(assets);
+  const damage = uniform(assets.barkDamage ?? 0.35);
   const seed = uniform(vec3(0, 0, 0));
   const freq = uniform(0.55); // world-space noise frequency (period ≈ 1/freq metres)
   const mat = new MeshStandardNodeMaterial({
@@ -181,14 +181,14 @@ export function makeCactusFleshMaterial(assets = {}) {
     // (forestBarkMaterial, which only copies map/normalMap/roughnessMap) still
     // renders textured; the hero overrides them with the blend nodes below.
     map: assets.barkTexture,
-    normalMap: assets.fleshCleanNormal ?? assets.barkNormal ?? null,
+    normalMap: assets.barkCleanNormal ?? assets.barkNormal ?? null,
     roughnessMap: assets.barkRoughness ?? null,
     metalness: 0.0,
   });
-  const tint = uniform(vec3(1, 1, 1)); // Bark-tint dial (multiplies the blended flesh)
-  const clnA = texture(assets.fleshCleanAlbedo);
+  const tint = uniform(vec3(1, 1, 1)); // Bark-tint dial (multiplies the blended bark)
+  const clnA = texture(assets.barkCleanAlbedo);
   const dmgA = texture(assets.barkTexture);
-  const clnR = texture(assets.fleshCleanRoughness ?? assets.barkRoughness);
+  const clnR = texture(assets.barkCleanRoughness ?? assets.barkRoughness);
   const dmgR = texture(assets.barkRoughness);
   // Fractal value noise in world space → [0,1]. 3 octaves gives soft blotch edges.
   const n = mx_fractal_noise_float(positionWorld.mul(freq).add(seed), 3, 2.0, 0.5, 1.0);
@@ -200,9 +200,9 @@ export function makeCactusFleshMaterial(assets = {}) {
   mat.colorNode = mix(clnA.rgb, dmgA.rgb, d).mul(tint);
   mat.roughnessNode = mix(clnR.r, dmgR.r, d);
   mat.positionNode = barkWindPosition();
-  mat.userData.fleshDamage = damage; // GUI "Flesh damage" dial writes .value
-  mat.userData.fleshSeed = seed;
-  mat.userData.fleshTint = tint;     // Bark-tint dial writes .value (linear)
+  mat.userData.barkDamage = damage; // GUI "Bark damage" dial writes .value
+  mat.userData.barkSeed = seed;
+  mat.userData.barkTint = tint;     // Bark-tint dial writes .value (linear)
   return mat;
 }
 

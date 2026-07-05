@@ -65,7 +65,7 @@ export function controlsFromSpecies(species) {
     frondDryestTint: 0xffffff,
     frondDryness: 0,
     spineTint: 0xffffff,
-    fleshDamage: species.fleshDamage ?? 0.35, // saguaro: clean↔scarred blend coverage
+    barkDamage: species.barkDamage ?? 0.35, // saguaro: clean↔scarred blend coverage
   };
   for (const d of species.controls ?? []) c[d.key] = d.get(species);
   for (const d of species.advancedControls ?? []) c[d.key] = d.get(species); // L-system Advanced dials
@@ -266,7 +266,7 @@ export function buildGUI(opts) {
     const isCactus = !!sp.cactus;              // saguaro → spines
     const isFrondRosette = isRosette && !isCactus; // Joshua/yuccas → fronds
     // Rosette species (yucca/cactus) don't use the leaf-card material, so hide the
-    // leaf editor for them; bark tint/flat still apply to their flesh material.
+    // leaf editor for them; bark tint/flat still apply to their bark material.
     leaves.domElement.style.display = isRosette ? 'none' : '';
     if (!isRosette) {
       // Colorize: pick a target color, then dial how far to interpolate the leaf
@@ -295,10 +295,10 @@ export function buildGUI(opts) {
     }
     bark.addColor(proxy, 'barkTint').name('Tint').onChange(mtweak('barkTint'));
     bark.add(proxy, 'barkFlat').name('Flat shading').onChange(mtweak('barkFlat'));
-    // Flesh damage lives with the BARK/flesh material (it's the cactus skin, not the
+    // Bark damage lives with the BARK material (it's the cactus skin, not the
     // spines): how much scarred skin blends over the clean base via the world-space
     // low-freq mask (never tiles). 0 = pristine, 1 = heavy.
-    if (isCactus) bark.add(proxy, 'fleshDamage', 0, 1, 0.01).name('Flesh damage').onChange(mtweak('fleshDamage'));
+    if (isCactus) bark.add(proxy, 'barkDamage', 0, 1, 0.01).name('Bark damage').onChange(mtweak('barkDamage'));
   }
   buildLeafBarkControls();
 

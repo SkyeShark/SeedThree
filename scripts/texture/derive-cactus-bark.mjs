@@ -1,18 +1,18 @@
-// Derive a clean saguaro-flesh PBR set from a Codex "undamaged" albedo.
+// Derive a clean saguaro-bark PBR set from a Codex "undamaged" albedo.
 //
-// The flesh is waxy cactus skin: fairly LOW, uniform roughness (not bark-rough),
+// The bark is waxy cactus skin: fairly LOW, uniform roughness (not bark-rough),
 // with a gentle normal that carries only the rib banding + areole dots (the big
 // rib undulation is real mesh geometry, so we keep the normal subtle). Tileable
 // via wrap-sampled Scharr. Writes _albedo (resized), _normal, _roughness.
 //
-// Usage: node scripts/texture/derive-cactus-flesh.mjs <clean_albedo_src> <out_stem> [--size 1024] [--strength 1.4]
+// Usage: node scripts/texture/derive-cactus-bark.mjs <clean_albedo_src> <out_stem> [--size 1024] [--strength 1.4]
 
 import sharp from 'sharp';
 
 const args = process.argv.slice(2);
 const src = args[0];
 const stem = args[1];
-if (!src || !stem) { console.error('usage: derive-cactus-flesh.mjs <src> <out_stem> [--size N] [--strength N]'); process.exit(2); }
+if (!src || !stem) { console.error('usage: derive-cactus-bark.mjs <src> <out_stem> [--size N] [--strength N]'); process.exit(2); }
 const gi = (f, d) => { const i = args.indexOf(f); return i >= 0 ? parseFloat(args[i + 1]) : d; };
 const SIZE = gi('--size', 1024);
 const STRENGTH = gi('--strength', 1.4);
@@ -32,7 +32,7 @@ const wrap = (v, n) => (v % n + n) % n;
 const L = (x, y) => lum[wrap(y, H) * W + wrap(x, W)];
 
 // 2. NORMAL — Scharr gradient (5× lower angular error than Sobel), wrap-tiled,
-// +Y/OpenGL for three.js. Subtle strength: the flesh is smooth, the ribs are mesh.
+// +Y/OpenGL for three.js. Subtle strength: the bark is smooth, the ribs are mesh.
 const normal = Buffer.alloc(W * H * 3);
 for (let y = 0; y < H; y++) {
   for (let x = 0; x < W; x++) {
@@ -59,4 +59,4 @@ for (let i = 0; i < W * H; i++) {
 }
 await sharp(rough, { raw: { width: W, height: H, channels: 1 } }).png().toFile(`${stem}_roughness.png`);
 
-console.log(`clean flesh: ${stem}_albedo/_normal/_roughness.png  ${W}x${H}  (strength ${STRENGTH})`);
+console.log(`clean bark: ${stem}_albedo/_normal/_roughness.png  ${W}x${H}  (strength ${STRENGTH})`);

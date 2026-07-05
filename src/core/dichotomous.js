@@ -379,7 +379,7 @@ function ringVertices(center, tangent, refDir, radius, seg, uvY, uScale, out, ri
 // WebGPU reuses the compiled pipeline instead of recompiling (~0.8s) every rebuild.
 export function buildMergedMesh(stems, params, targetGeo = null) {
   const p = { ...DEFAULTS, ...params };
-  // RIB LOCK invariant: the flesh texture carries `ribsPerTile` rib-crest columns,
+  // RIB LOCK invariant: the bark texture carries `ribsPerTile` rib-crest columns,
   // and the tube wraps it uScale = ribCount/ribsPerTile times. For the painted
   // areole holes to keep landing on the mesh crests (and the real spines) as the
   // user changes the rib COUNT, uScale must stay an integer → ribCount must stay a
@@ -431,7 +431,7 @@ export function buildMergedMesh(stems, params, targetGeo = null) {
     // keep a constant aspect on the trunk and the branches alike.
     const refIdx = Math.min(stem.radii.length - 1, Math.floor(stem.radii.length * 0.5));
     const circRef = 2 * Math.PI * stem.radii[refIdx];
-    // CACTUS RIB LOCK: the flesh texture is painted with `ribsPerTile` rib crests
+    // CACTUS RIB LOCK: the bark texture is painted with `ribsPerTile` rib crests
     // (each carrying its column of areole/spine holes). To land those painted holes
     // dead on the mesh's rib crests — and thus on the real spine cards seated there —
     // the texture must wrap an INTEGER number of times AND that wrap count must place
