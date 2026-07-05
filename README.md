@@ -140,5 +140,6 @@ docs/          spec notes + media
 
 [MIT](LICENSE)
 
-By SkyeShark (Utah Teapot) and Claudes
-Not originally inspired by [EZ-Tree](https://github.com/dgreenheck/ez-tree) but subsequent post-release features were!
+By SkyeShark (Utah Teapot) and Claudes.
+
+Not originally inspired by [EZ-Tree](https://github.com/dgreenheck/ez-tree) but subsequent post-release features were.
