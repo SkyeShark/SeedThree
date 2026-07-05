@@ -136,8 +136,9 @@ assets/        committed textures & audio
 docs/          spec notes + media
 ```
 
+
+By SkyeShark (Utah Teapot)
+
 ## License
 
-[MIT](LICENSE) © 2026 SkyeShark.
-
-Generated textures/audio are produced with third-party models (gpt-image-2, Stable Audio 3) and trimmed xeno-canto recordings; check the respective licenses before commercial redistribution of those assets.
+[MIT](LICENSE)
