@@ -19,7 +19,7 @@ import {
   BufferGeometry, BufferAttribute, InstancedBufferAttribute, InstancedMesh,
   MeshSSSNodeMaterial, Group, Matrix4, Quaternion, Vector3, Color, DoubleSide, DynamicDrawUsage,
 } from 'three/webgpu';
-import { texture, uv, attribute, mix, vec3, vec4, uniform, dot } from 'three/tsl';
+import { texture, uv, attribute, mix, vec3, vec4, uniform, dot, float } from 'three/tsl';
 import { rosetteWindPosition, WIND_DIR } from './wind.js';
 
 const Y = new Vector3(0, 1, 0);
@@ -147,16 +147,33 @@ export function makeYuccaMaterial(assets) {
   // within WebGPU's 8-vertex-buffer limit (see rosetteWindPosition).
   const pack = attribute('aPack', 'vec4');
   const age = pack.z;
+  // Per-age-stage frond tints (green / dry / dryest) + a global dryness that
+  // pushes the whole plant toward the dry/dryest end of the age ramp. All are
+  // uniforms so the GUI pickers apply live; defaults are white / 0 (no change).
+  // Tints are held in LINEAR space (applyMaterialTweaks converts), so multiplying
+  // the linearized albedo is colour-correct.
+  const greenTint = uniform(new Color(0xffffff));
+  const dryTint = uniform(new Color(0xffffff));
+  const dryestTint = uniform(new Color(0xffffff));
+  const dryness = uniform(0);
   if (assets.leafTexture) {
     const green = texture(assets.leafTexture);
     // `age` here = DISTANCE FROM THE NEAREST GREEN ROSETTE TOP (set per skirt cone
     // in buildYuccaFoliage), NOT height down a branch — so a branch with no green
     // crown of its own reads fully dry. Ramp: crown stays green (age<0.42) →
-    // DRY near green → DRIEST far from any green.
-    let col = green;
-    if (assets.leafDryTexture) col = mix(green, texture(assets.leafDryTexture), age.smoothstep(0.42, 0.6));
-    if (assets.leafDryestTexture) col = mix(col, texture(assets.leafDryestTexture), age.smoothstep(0.6, 0.92));
-    let rgb = col.rgb;
+    // DRY near green → DRIEST far from any green. Dryness shifts the ramp toward 1.
+    const age2 = mix(age, float(1), dryness);
+    // Tint each stage BEFORE blending so each age texture recolours independently.
+    let rgb = green.rgb.mul(greenTint);
+    let alpha = green.a;
+    if (assets.leafDryTexture) {
+      const d = texture(assets.leafDryTexture); const t = age2.smoothstep(0.42, 0.6);
+      rgb = mix(rgb, d.rgb.mul(dryTint), t); alpha = mix(alpha, d.a, t);
+    }
+    if (assets.leafDryestTexture) {
+      const d = texture(assets.leafDryestTexture); const t = age2.smoothstep(0.6, 0.92);
+      rgb = mix(rgb, d.rgb.mul(dryestTint), t); alpha = mix(alpha, d.a, t);
+    }
     // Fallback ONLY when no driest texture is supplied: fade the far skirt toward
     // the bark color (dead leaves compacting into the trunk skin).
     if (assets.leafDryTexture && !assets.leafDryestTexture) {
@@ -164,9 +181,9 @@ export function makeYuccaMaterial(assets) {
       const barkLum = 0.2;
       const lum = dot(rgb, vec3(0.299, 0.587, 0.114));
       const barkTinted = barkCol.mul(lum.div(barkLum).clamp(0.45, 1.7));
-      rgb = mix(rgb, barkTinted, age.smoothstep(0.72, 0.97).mul(0.8));
+      rgb = mix(rgb, barkTinted, age2.smoothstep(0.72, 0.97).mul(0.8));
     }
-    mat.colorNode = vec4(rgb, col.a);
+    mat.colorNode = vec4(rgb, alpha);
   }
   // Backlit transmission — VERY dim (thick succulent blades). Uses the user's
   // translucency map when present (how Joshua fronds actually respond backlit),
@@ -182,7 +199,7 @@ export function makeYuccaMaterial(assets) {
   mat.thicknessPowerNode = uniform(8.0);
   mat.thicknessScaleNode = uniform(1.2);
   mat.positionNode = rosetteWindPosition();
-  return mat;
+  return { material: mat, greenTint, dryTint, dryestTint, dryness };
 }
 
 function frameAt(stem, back, out) {

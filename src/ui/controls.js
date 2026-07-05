@@ -57,6 +57,14 @@ export function controlsFromSpecies(species) {
     leafQuads: species.foliage?.quads ?? 2,
     barkTint: 0xffffff,
     barkFlat: false,
+    // Desert species color editing. Fronds (Joshua/yuccas) have 3 age-stage tints
+    // + a dryness bias; cactus spines (saguaro) tint like bark. All default to no
+    // change and apply live via the cached material (no rebuild).
+    frondGreenTint: 0xffffff,
+    frondDryTint: 0xffffff,
+    frondDryestTint: 0xffffff,
+    frondDryness: 0,
+    spineTint: 0xffffff,
   };
   for (const d of species.controls ?? []) c[d.key] = d.get(species);
   return c;
@@ -214,12 +222,18 @@ export function buildGUI(opts) {
   const mtweak = (key) => (v) => { state.controls[key] = v; onMaterialTweak?.(); };
   const geom = (key) => (v) => { state.controls[key] = v; onChange(); };
   const leaves = gui.addFolder('Leaves');
+  const fronds = gui.addFolder('Fronds'); // rosette foliage (Joshua/yuccas)
+  const spines = gui.addFolder('Spines'); // cactus (saguaro)
   const bark = gui.addFolder('Bark');
   function buildLeafBarkControls() {
     leaves.controllers.slice().forEach((ct) => ct.destroy());
+    fronds.controllers.slice().forEach((ct) => ct.destroy());
+    spines.controllers.slice().forEach((ct) => ct.destroy());
     bark.controllers.slice().forEach((ct) => ct.destroy());
     const sp = speciesMap[state.speciesKey];
     const isRosette = sp.foliageType === 'rosette';
+    const isCactus = !!sp.cactus;              // saguaro → spines
+    const isFrondRosette = isRosette && !isCactus; // Joshua/yuccas → fronds
     // Rosette species (yucca/cactus) don't use the leaf-card material, so hide the
     // leaf editor for them; bark tint/flat still apply to their flesh material.
     leaves.domElement.style.display = isRosette ? 'none' : '';
@@ -233,6 +247,20 @@ export function buildGUI(opts) {
       leaves.add(proxy, 'leafSizeVar', 0, 1, 0.01).name('Size variance').onChange(geom('leafSizeVar'));
       leaves.add(proxy, 'leafAlpha', 0, 1, 0.01).name('Alpha test').onChange(mtweak('leafAlpha'));
       leaves.add(proxy, 'leafQuads', { 'Single': 1, 'Crossed (double)': 2 }).name('Billboard').onChange(geom('leafQuads'));
+    }
+    // Fronds (Joshua/yuccas): recolor each age stage (green→dry→dryest) and bias
+    // the whole plant along that ramp. Live material tweaks — no rebuild.
+    fronds.domElement.style.display = isFrondRosette ? '' : 'none';
+    if (isFrondRosette) {
+      fronds.addColor(proxy, 'frondGreenTint').name('Green tint').onChange(mtweak('frondGreenTint'));
+      fronds.addColor(proxy, 'frondDryTint').name('Dry tint').onChange(mtweak('frondDryTint'));
+      fronds.addColor(proxy, 'frondDryestTint').name('Dryest tint').onChange(mtweak('frondDryestTint'));
+      fronds.add(proxy, 'frondDryness', 0, 1, 0.01).name('Dryness').onChange(mtweak('frondDryness'));
+    }
+    // Spines (saguaro): simple tint over the spine albedo.
+    spines.domElement.style.display = isCactus ? '' : 'none';
+    if (isCactus) {
+      spines.addColor(proxy, 'spineTint').name('Spine tint').onChange(mtweak('spineTint'));
     }
     bark.addColor(proxy, 'barkTint').name('Tint').onChange(mtweak('barkTint'));
     bark.add(proxy, 'barkFlat').name('Flat shading').onChange(mtweak('barkFlat'));

@@ -119,7 +119,13 @@ async function loadSpeciesAssets(species, sunLight = null) {
     assets.spineMat = makeSpineMaterial(assets, sunLight);
   } else if (species.foliageType === 'rosette') {
     // Rosette species: one spike-leaf material at every LOD (no card system).
-    assets.rosetteMat = makeYuccaMaterial(assets, species.foliage);
+    const yucca = makeYuccaMaterial(assets, species.foliage);
+    assets.rosetteMat = yucca.material;
+    // Per-age-stage frond tints + dryness (GUI pickers apply these live).
+    assets.frondGreenTint = yucca.greenTint;
+    assets.frondDryTint = yucca.dryTint;
+    assets.frondDryestTint = yucca.dryestTint;
+    assets.frondDryness = yucca.dryness;
   } else {
     // Two foliage materials: single-leaf (LOD0) and cluster (LOD1+). Cached & reused.
     const leafFol = makeFoliageMaterial(assets, { ...species.foliage, mode: 'leaves' });
@@ -587,6 +593,14 @@ async function main() {
     if (c.leafAlpha !== undefined) for (const m of [a.leafMat, a.clusterMat]) if (m && m.alphaTest !== c.leafAlpha) { m.alphaTest = c.leafAlpha; m.needsUpdate = true; }
     if (c.barkTint !== undefined) a.barkMat?.color.set(c.barkTint);
     if (c.barkFlat !== undefined && a.barkMat && a.barkMat.flatShading !== c.barkFlat) { a.barkMat.flatShading = c.barkFlat; a.barkMat.needsUpdate = true; }
+    // Rosette FRONDS (Joshua/yuccas): per-age-stage tints multiply their albedo,
+    // so hold them LINEAR (convertSRGBToLinear) to match the linearized texture.
+    if (c.frondGreenTint !== undefined) a.frondGreenTint?.value.set(c.frondGreenTint).convertSRGBToLinear();
+    if (c.frondDryTint !== undefined) a.frondDryTint?.value.set(c.frondDryTint).convertSRGBToLinear();
+    if (c.frondDryestTint !== undefined) a.frondDryestTint?.value.set(c.frondDryestTint).convertSRGBToLinear();
+    if (c.frondDryness !== undefined && a.frondDryness) a.frondDryness.value = c.frondDryness;
+    // Cactus SPINES: material keeps mat.color (no colorNode override) → tint like bark.
+    if (c.spineTint !== undefined) a.spineMat?.color.set(c.spineTint);
   }
 
   // onStage(text, frac) is the loading-screen progress reporter. It's only passed
@@ -1288,7 +1302,7 @@ async function main() {
     renderFrame(); // GTAO post-pass or direct; billboard bake is OFF-THREAD (worker) → viewer paints every frame
   });
 
-  Object.assign(window, { THREE, scene, camera, renderer, state, optState, envState, postProcessing, aoPass, scenePass, setAOOutput, applyAA, rebuild: () => { needsRebuild = true; }, _rebuildNow: rebuild, applyPreset });
+  Object.assign(window, { THREE, scene, camera, renderer, state, optState, envState, postProcessing, aoPass, scenePass, setAOOutput, applyAA, assetCache, rebuild: () => { needsRebuild = true; }, _rebuildNow: rebuild, applyPreset });
 }
 
 main().catch((e) => fail(`Init failed: ${e?.stack || e}`));
