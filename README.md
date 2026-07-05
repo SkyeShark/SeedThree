@@ -136,9 +136,7 @@ assets/        committed textures & audio
 docs/          spec notes + media
 ```
 
-
-By SkyeShark (Utah Teapot)
-
 ## License
 
 [MIT](LICENSE)
+By SkyeShark (Utah Teapot) and Claudes
