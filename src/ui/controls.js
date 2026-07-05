@@ -45,6 +45,17 @@ export function controlsFromSpecies(species) {
     forceDirY: species.params?.forceDir?.y ?? 1,
     forceDirZ: species.params?.forceDir?.z ?? 0,
     forceStrength: species.params?.forceStrength ?? 0,
+    // ez-tree parity leaf/bark editing. Geometry ones (angle/start/sizeVar/quads)
+    // reshape on rebuild; material ones (tint/alphaTest/flat) update the cached
+    // material live. Defaults read from the species so a switch re-seeds them.
+    leafTint: species.foliage?.tint ?? 0xffffff,
+    leafAngle: species.foliage?.downAngle ?? 52,
+    leafStart: species.foliage?.startFrac ?? 0.1,
+    leafSizeVar: species.foliage?.sizeVar ?? 0.3,
+    leafAlpha: species.foliage?.alphaTest ?? 0.4,
+    leafQuads: species.foliage?.quads ?? 2,
+    barkTint: 0xffffff,
+    barkFlat: false,
   };
   for (const d of species.controls ?? []) c[d.key] = d.get(species);
   return c;
@@ -79,6 +90,14 @@ export function applySpeciesControls(species, c) {
     s.params.forceDir = { x: c.forceDirX ?? 0, y: c.forceDirY ?? 1, z: c.forceDirZ ?? 0 };
     s.params.forceStrength = c.forceStrength;
   }
+  // Leaf GEOMETRY overrides (ez-tree parity) — reshape the foliage cards on rebuild.
+  // Tint/alphaTest are MATERIAL props applied live (cached material), not here.
+  if (s.foliage) {
+    if (c.leafAngle !== undefined) s.foliage.downAngle = c.leafAngle;
+    if (c.leafStart !== undefined) s.foliage.startFrac = c.leafStart;
+    if (c.leafSizeVar !== undefined) s.foliage.sizeVar = c.leafSizeVar;
+    if (c.leafQuads !== undefined) s.foliage.quads = c.leafQuads;
+  }
   if (c.showLeaves === false) s.foliage = false;
   return s;
 }
@@ -89,7 +108,7 @@ export function applySpeciesControls(species, c) {
  *   stats: { species, seed, stems, leaves, triangles } — updated via returned api
  */
 export function buildGUI(opts) {
-  const { speciesMap, state, sunState, envState, optState, windState, camState, onChange, onRandomize, onExport, onExportPNG, onSun, onScaleRef, onFog, onWind, onForest, onSpom, onOpt, onCamera, onLoadRebuild } = opts;
+  const { speciesMap, state, sunState, envState, optState, windState, camState, onChange, onRandomize, onExport, onExportPNG, onSun, onScaleRef, onFog, onWind, onForest, onSpom, onOpt, onCamera, onLoadRebuild, onMaterialTweak } = opts;
   const gui = new GUI({ title: '' });
 
   // Branding header (Codex-generated logo + wordmark; falls back to plain text
@@ -115,6 +134,7 @@ export function buildGUI(opts) {
     proxy.species = speciesMap[key].name;
     buildParamControls(); // rebuild sliders for this species' branching type
     buildAdvancedControls();
+    buildLeafBarkControls();
   });
 
   gui.add(proxy, 'seed', 1, 9999, 1).name('Seed').onChange((v) => { state.controls.seed = v; onChange(); }).listen();
@@ -166,6 +186,34 @@ export function buildGUI(opts) {
     advanced.add(proxy, 'forceStrength', 0, 0.12, 0.001).name('Force strength').onChange((v) => { state.controls.forceStrength = v; onChange(); });
   }
   buildAdvancedControls();
+
+  // Leaves + Bark editing (ez-tree parity). A material tweak (tint/alphaTest/flat)
+  // updates the cached material live (onMaterialTweak, no rebuild); a geometry tweak
+  // (angle/start/size-variance/quads) reshapes the cards on rebuild (onChange).
+  const mtweak = (key) => (v) => { state.controls[key] = v; onMaterialTweak?.(); };
+  const geom = (key) => (v) => { state.controls[key] = v; onChange(); };
+  const leaves = gui.addFolder('Leaves');
+  const bark = gui.addFolder('Bark');
+  function buildLeafBarkControls() {
+    leaves.controllers.slice().forEach((ct) => ct.destroy());
+    bark.controllers.slice().forEach((ct) => ct.destroy());
+    const sp = speciesMap[state.speciesKey];
+    const isRosette = sp.foliageType === 'rosette';
+    // Rosette species (yucca/cactus) don't use the leaf-card material, so hide the
+    // leaf editor for them; bark tint/flat still apply to their flesh material.
+    leaves.domElement.style.display = isRosette ? 'none' : '';
+    if (!isRosette) {
+      leaves.addColor(proxy, 'leafTint').name('Tint').onChange(mtweak('leafTint'));
+      leaves.add(proxy, 'leafAngle', 0, 100, 1).name('Angle').onChange(geom('leafAngle'));
+      leaves.add(proxy, 'leafStart', 0, 1, 0.01).name('Start').onChange(geom('leafStart'));
+      leaves.add(proxy, 'leafSizeVar', 0, 1, 0.01).name('Size variance').onChange(geom('leafSizeVar'));
+      leaves.add(proxy, 'leafAlpha', 0, 1, 0.01).name('Alpha test').onChange(mtweak('leafAlpha'));
+      leaves.add(proxy, 'leafQuads', { 'Single': 1, 'Crossed (double)': 2 }).name('Billboard').onChange(geom('leafQuads'));
+    }
+    bark.addColor(proxy, 'barkTint').name('Tint').onChange(mtweak('barkTint'));
+    bark.add(proxy, 'barkFlat').name('Flat shading').onChange(mtweak('barkFlat'));
+  }
+  buildLeafBarkControls();
 
   // Optimization: LOD chain preview + switch distances + billboard bake options.
   if (optState && onOpt) {
@@ -235,6 +283,7 @@ export function buildGUI(opts) {
     Object.assign(proxy, state.controls);
     buildParamControls();
     buildAdvancedControls();
+    buildLeafBarkControls();
     gui.controllersRecursive().forEach((c) => c.updateDisplay());
     onLoadRebuild?.(); // main.js: biome + build for the loaded state (no controls reset)
   }

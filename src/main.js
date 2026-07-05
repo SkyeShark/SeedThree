@@ -474,6 +474,22 @@ async function main() {
     return cards;
   }
 
+  // Live material tweaks (ez-tree parity: leaf/bark tint, alpha, flat-shading).
+  // Materials are cached per species and reused across rebuilds, so these edit the
+  // cached material in place — no rebuild, no recompile for color (a uniform);
+  // alphaTest/flatShading only flip needsUpdate when the value actually changes, so
+  // they don't recompile every rebuild. Re-applied at the end of each rebuild so a
+  // preset load (which reuses a cached material) still takes effect.
+  function applyMaterialTweaks() {
+    const a = assetCache.get(SPECIES[state.speciesKey].name);
+    if (!a) return;
+    const c = state.controls;
+    if (c.leafTint !== undefined) { a.leafMat?.color.set(c.leafTint); a.clusterMat?.color.set(c.leafTint); }
+    if (c.leafAlpha !== undefined) for (const m of [a.leafMat, a.clusterMat]) if (m && m.alphaTest !== c.leafAlpha) { m.alphaTest = c.leafAlpha; m.needsUpdate = true; }
+    if (c.barkTint !== undefined) a.barkMat?.color.set(c.barkTint);
+    if (c.barkFlat !== undefined && a.barkMat && a.barkMat.flatShading !== c.barkFlat) { a.barkMat.flatShading = c.barkFlat; a.barkMat.needsUpdate = true; }
+  }
+
   // onStage(text, frac) is the loading-screen progress reporter. It's only passed
   // on the heavy (species-switch / first-load) path; the fast reuse path calls
   // rebuild() with no arg, so `onStage?.()` is a no-op and injects no frame yields.
@@ -517,6 +533,7 @@ async function main() {
         forestPendingBillboard = true;
       }
       updateStats(species, group);
+      applyMaterialTweaks(); // re-assert leaf/bark tint/alpha/flat onto the (cached) materials
       // Billboard impostor (far LOD) is baked ONCE per species, then FROZEN — same
       // policy as the grove. The bake does a blocking RT readback + a new-material
       // compile; running it after every edit-settle was the residual ~0.8s freeze
@@ -1018,6 +1035,7 @@ async function main() {
     // GUI's applyPreset; run the full biome + build for them (heavyRebuild does NOT
     // reset controls — only the species dropdown's onChange path does).
     onLoadRebuild: () => heavyRebuild(`Loading ${SPECIES[state.speciesKey].name}…`, () => buildBiome(SPECIES[state.speciesKey])),
+    onMaterialTweak: () => applyMaterialTweaks(), // live leaf/bark tint/alpha/flat, no rebuild
     onOpt,
     onSun: () => updateSun(),
     onScaleRef: (v) => { scaleRef.visible = v; },
