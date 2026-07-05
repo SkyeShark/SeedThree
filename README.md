@@ -12,8 +12,8 @@
 
 A fully procedural tree and plant generator: pick a species, tune its parameters, and get a unique, textured, wind-animated 3D plant you can drop into a scene or export to glTF.
 
-[![SeedThree — a procedurally generated White Oak tree with the live control panel showing shape, foliage, and advanced branch tuning](docs/media/hero_temperate.png)]
-[![SeedThree — a procedurally generated Joshua tree in the desert with the live control panel showing shape, foliage, and LOD parameters](docs/media/hero.png)](https://skyeshark.github.io/SeedThree/)
+![SeedThree — a procedurally generated White Oak tree with the live control panel showing shape, foliage, and advanced branch tuning](docs/media/hero_temperate.png)
+![SeedThree — a procedurally generated Joshua tree in the desert with the live control panel showing shape, foliage, and LOD parameters](docs/media/hero.png)
 
 > **Status: `v0.1.0-alpha`.** Ten species, full LOD + export pipeline, and a living scene are in — but it's early and rough in places. Expect sharp edges.
 
