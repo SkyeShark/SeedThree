@@ -10,7 +10,7 @@
 
 </div>
 
-The goal isn't to clone a fixed model library — it's *infinite species generation*: pick a species, tune its parameters, and get a unique, textured, wind-animated 3D plant you can drop into a scene or export to glTF.
+A fully procedural tree and plant generator: pick a species, tune its parameters, and get a unique, textured, wind-animated 3D plant you can drop into a scene or export to glTF.
 
 [![SeedThree — a procedurally generated Joshua tree in the desert with the live control panel showing shape, foliage, and LOD parameters](docs/media/hero.png)](https://skyeshark.github.io/SeedThree/)
 
