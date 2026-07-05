@@ -109,6 +109,8 @@ function buildDichotomousTree(species, seed, assets, lodOpts, reuse = null) {
   return { group: lod, stems, tips: terminalStems };
 }
 import { barkWindPosition, instancedBarkWindPosition } from './wind.js';
+import { texture, mix, smoothstep, positionWorld, uniform, float, vec3 } from 'three/tsl';
+import { mx_fractal_noise_float } from 'three/tsl';
 
 // Bark material — created once per species (reused across rebuilds, see buildTree).
 export function makeBarkMaterial(assets = {}) {
@@ -121,6 +123,54 @@ export function makeBarkMaterial(assets = {}) {
     metalness: 0.0,
   });
   mat.positionNode = barkWindPosition(); // sway ∝ baked aWind (trunk-stiff → tip-sway)
+  return mat;
+}
+
+// Saguaro flesh — a CLEAN base skin (Codex "undamaged" variant) with real photo
+// damage (scars/blotches) blended IN only where a low-frequency, WORLD-space noise
+// mask says so. Two wins from one trick:
+//   • On a single tall column the damage no longer tiles vertically (the 1K damage
+//     tile used to repeat every ~1 m → obvious stacking). The mask period is ~2 m,
+//     so a 6 m cactus shows only a couple of damage zones at non-repeating heights.
+//   • Forest instances sit at different world positions → each samples a different
+//     slice of the noise field → free per-plant variety, no instance attribute.
+// Clean & damaged albedo/roughness are co-registered in UV (the clean was Codex-
+// seeded from the damaged), so the mix is clean skin ↔ scarred skin at the same
+// texel. Normal uses the clean map throughout (its scar bumps tiled too). The
+// `damage` uniform (0 pristine … 1 heavy) is the user dial; `seed` offsets the
+// noise so successive generations differ. Falls back to plain bark if no clean set.
+export function makeCactusFleshMaterial(assets = {}) {
+  if (!assets.fleshCleanAlbedo || !assets.barkTexture) return makeBarkMaterial(assets);
+  const damage = uniform(assets.fleshDamage ?? 0.35);
+  const seed = uniform(vec3(0, 0, 0));
+  const freq = uniform(0.55); // world-space noise frequency (period ≈ 1/freq metres)
+  const mat = new MeshStandardNodeMaterial({
+    // .map/.roughnessMap kept as the DAMAGED set so the forest twin
+    // (forestBarkMaterial, which only copies map/normalMap/roughnessMap) still
+    // renders textured; the hero overrides them with the blend nodes below.
+    map: assets.barkTexture,
+    normalMap: assets.fleshCleanNormal ?? assets.barkNormal ?? null,
+    roughnessMap: assets.barkRoughness ?? null,
+    metalness: 0.0,
+  });
+  const tint = uniform(vec3(1, 1, 1)); // Bark-tint dial (multiplies the blended flesh)
+  const clnA = texture(assets.fleshCleanAlbedo);
+  const dmgA = texture(assets.barkTexture);
+  const clnR = texture(assets.fleshCleanRoughness ?? assets.barkRoughness);
+  const dmgR = texture(assets.barkRoughness);
+  // Fractal value noise in world space → [0,1]. 3 octaves gives soft blotch edges.
+  const n = mx_fractal_noise_float(positionWorld.mul(freq).add(seed), 3, 2.0, 0.5, 1.0);
+  const m = n.mul(0.5).add(0.5);
+  // coverage: damage=0 → threshold above the noise range (pristine); damage=1 →
+  // below it (fully scarred). 0.18 half-width = a soft fade at every patch edge.
+  const t = mix(float(1.08), float(-0.08), damage);
+  const d = smoothstep(t.sub(0.18), t.add(0.18), m);
+  mat.colorNode = mix(clnA.rgb, dmgA.rgb, d).mul(tint);
+  mat.roughnessNode = mix(clnR.r, dmgR.r, d);
+  mat.positionNode = barkWindPosition();
+  mat.userData.fleshDamage = damage; // GUI "Flesh damage" dial writes .value
+  mat.userData.fleshSeed = seed;
+  mat.userData.fleshTint = tint;     // Bark-tint dial writes .value (linear)
   return mat;
 }
 

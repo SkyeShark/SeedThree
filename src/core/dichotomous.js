@@ -335,7 +335,7 @@ export function generateDichotomous(userParams, rng) {
 // vertex count so stitching is i→i; rotation-minimizing frames avoid twist.
 
 const _rmfAxis = new Vector3();
-function ringVertices(center, tangent, refDir, radius, seg, uvY, uScale, out, ribCount = 0, ribDepth = 0, prevTangent = null) {
+function ringVertices(center, tangent, refDir, radius, seg, uvY, uScale, out, ribCount = 0, ribDepth = 0, prevTangent = null, uPhase = 0) {
   // Rotation-minimizing frame. Naively RE-PROJECTING a fixed refDir onto each ring
   // (n = refDir − t·(refDir·t)) collapses when the tangent swings toward refDir on a
   // STRONG bend: n→0, we fall back to perp(tangent), and that basis-dependent vector
@@ -363,7 +363,7 @@ function ringVertices(center, tangent, refDir, radius, seg, uvY, uScale, out, ri
     const rr = ribDepth > 0 ? radius * (1 + ribDepth * Math.cos(ribCount * a)) : radius;
     out.pos.push(center.x + dir.x * rr, center.y + dir.y * rr, center.z + dir.z * rr);
     out.nrm.push(dir.x, dir.y, dir.z);
-    out.uv.push((j / seg) * uScale, uvY);
+    out.uv.push((j / seg) * uScale + uPhase, uvY);
     out.wind.push(0);
     out.center.push(center.x, center.y, center.z); // centerline → wind sway phase
   }
@@ -375,6 +375,17 @@ function ringVertices(center, tangent, refDir, radius, seg, uvY, uScale, out, ri
 // WebGPU reuses the compiled pipeline instead of recompiling (~0.8s) every rebuild.
 export function buildMergedMesh(stems, params, targetGeo = null) {
   const p = { ...DEFAULTS, ...params };
+  // RIB LOCK invariant: the flesh texture carries `ribsPerTile` rib-crest columns,
+  // and the tube wraps it uScale = ribCount/ribsPerTile times. For the painted
+  // areole holes to keep landing on the mesh crests (and the real spines) as the
+  // user changes the rib COUNT, uScale must stay an integer → ribCount must stay a
+  // multiple of ribsPerTile. Snap it here so ANY rib-count dial value stays aligned.
+  if (p.ribCount > 0 && p.ribDepth > 0) {
+    const rpt = p.ribsPerTile ?? 4;
+    p.ribCount = Math.max(rpt, Math.round(p.ribCount / rpt) * rpt);
+    p.radialSegs = Math.max(p.radialSegs, p.ribCount * 2); // ≥2 verts/rib, multiple of ribCount → a vertex on every crest
+    p.radialSegs = Math.round(p.radialSegs / p.ribCount) * p.ribCount;
+  }
   const seg = p.radialSegs;
   const ringLen = seg + 1;
   const out = { pos: [], nrm: [], uv: [], wind: [], center: [], idx: [] };
@@ -410,9 +421,30 @@ export function buildMergedMesh(stems, params, targetGeo = null) {
     // keep a constant aspect on the trunk and the branches alike.
     const refIdx = Math.min(stem.radii.length - 1, Math.floor(stem.radii.length * 0.5));
     const circRef = 2 * Math.PI * stem.radii[refIdx];
-    const wraps = circRef / p.tileWorldSize;
-    const uScale = wraps >= 0.75 ? Math.max(1, Math.round(wraps)) : wraps; // integer on stems, fractional only on thin twigs
-    const tileV = Math.max(0.02, circRef / uScale);
+    // CACTUS RIB LOCK: the flesh texture is painted with `ribsPerTile` rib crests
+    // (each carrying its column of areole/spine holes). To land those painted holes
+    // dead on the mesh's rib crests — and thus on the real spine cards seated there —
+    // the texture must wrap an INTEGER number of times AND that wrap count must place
+    // one painted crest per mesh rib. uScale = ribCount / ribsPerTile does exactly
+    // that (independent of stem radius → constant across every segment, which also
+    // removes the per-stem rounding jump that misaligned one terminal segment). uPhase
+    // = 0.5/ribsPerTile centres the crests inside the tile so the wrap seam falls in a
+    // groove (hidden), matching how the texture is drawn.
+    const fluted = p.ribCount > 0 && p.ribDepth > 0;
+    const ribsPerTile = p.ribsPerTile ?? 4;
+    let uScale, uPhase = 0, tileV;
+    if (fluted) {
+      uScale = Math.max(1, Math.round(p.ribCount / ribsPerTile));
+      uPhase = 0.5 / ribsPerTile;
+      // V rate is CONSTANT (not radius-derived) so no segment shows a vertical texel
+      // jump. The Bark-tiling dial repurposes cleanly here: it sets the vertical tile
+      // size (rib spacing down the column) without disturbing the locked rib columns.
+      tileV = Math.max(0.05, p.tileWorldSize);
+    } else {
+      const wraps = circRef / p.tileWorldSize;
+      uScale = wraps >= 0.75 ? Math.max(1, Math.round(wraps)) : wraps; // integer on stems, fractional only on thin twigs
+      tileV = Math.max(0.02, circRef / uScale);
+    }
     // RIB FADE AT A FORK BASE: a diverging arm's flared, fluted base drives sharp
     // star-peaks sideways out of the crotch (they don't align with the trunk's ribs).
     // Fade the rib depth from 0 at the base up to full over the arm's first stretch,
@@ -426,7 +458,7 @@ export function buildMergedMesh(stems, params, targetGeo = null) {
       const base = out.pos.length / 3;
       if (i > 0) { const dl = stem.points[i].distanceTo(stem.points[i - 1]); vY += dl / tileV; arc += dl; }
       const rd = fadeFork ? p.ribDepth * smoothstep01(arc / fadeLen) : p.ribDepth;
-      ref = ringVertices(stem.points[i], tangents[i], ref, stem.radii[i], seg, vY, uScale, out, p.ribCount, rd, i > 0 ? tangents[i - 1] : null);
+      ref = ringVertices(stem.points[i], tangents[i], ref, stem.radii[i], seg, vY, uScale, out, p.ribCount, rd, i > 0 ? tangents[i - 1] : null, uPhase);
       // wind weight per ring vertex
       for (let j = 0; j < ringLen; j++) out.wind[out.wind.length - ringLen + j] = stem.winds[i];
       // rib-crest anchors: crestDir at each rib peak uses the SAME (n,b) frame AND the
@@ -478,7 +510,7 @@ export function buildMergedMesh(stems, params, targetGeo = null) {
         const dC = capC.clone().addScaledVector(lastTan, capR * Math.sin(ang));
         const base = out.pos.length / 3;
         capVY += (capR / (nDome + 1)) / tileV;
-        ringVertices(dC, lastTan, ref, capR * Math.cos(ang), seg, capVY, uScale, out, p.ribCount, p.ribDepth);
+        ringVertices(dC, lastTan, ref, capR * Math.cos(ang), seg, capVY, uScale, out, p.ribCount, p.ribDepth, null, uPhase);
         for (let j = 0; j < ringLen; j++) out.wind[out.wind.length - ringLen + j] = stem.winds[stem.winds.length - 1];
         stitch(prev, base);
         prev = base;
@@ -500,14 +532,22 @@ export function buildMergedMesh(stems, params, targetGeo = null) {
           }
         }
       }
-      const apex = out.pos.length / 3; // triangle-fan tip closes the dome
+      // Close the dome with a DEGENERATE apex RING (every vertex at the tip point)
+      // instead of a single fanned apex vertex. Each apex vertex keeps the U of the
+      // ring below it, so the texture no longer smears from the ring's full U-span
+      // (0.125‥4.125) down to one point — that convergent smear read as the spiral/
+      // pinwheel glitch at the tip. Standard sphere-pole UV handling.
       const aC = capC.clone().addScaledVector(lastTan, capR);
-      out.pos.push(aC.x, aC.y, aC.z);
-      out.nrm.push(lastTan.x, lastTan.y, lastTan.z);
-      out.uv.push(0.5, capVY + 0.02);
-      out.wind.push(stem.winds[stem.winds.length - 1]);
-      out.center.push(capC.x, capC.y, capC.z);
-      for (let j = 0; j < seg; j++) out.idx.push(prev + j, apex, prev + j + 1);
+      const apexBase = out.pos.length / 3;
+      const apexVY = capVY + (capR / (nDome + 1)) / tileV;
+      for (let j = 0; j <= seg; j++) {
+        out.pos.push(aC.x, aC.y, aC.z);
+        out.nrm.push(lastTan.x, lastTan.y, lastTan.z);
+        out.uv.push((j / seg) * uScale + uPhase, apexVY);
+        out.wind.push(stem.winds[stem.winds.length - 1]);
+        out.center.push(capC.x, capC.y, capC.z);
+      }
+      stitch(prev, apexBase);
     }
     return { first: rings[0], last: lastBase, endRef: ref };
   }

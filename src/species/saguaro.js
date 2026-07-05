@@ -18,7 +18,8 @@ export const saguaro = {
   plantSink: 0.1,
   foliageType: 'rosette', // uses the dichotomous path; foliage is spines, not a rosette
   cactus: true,           // → fluted mesh + cactus-flesh material + spines (not bark/rosette)
-  tileWorldSize: 0.8,     // seeds the Bark-tiling dial; wired to params.tileWorldSize
+  tileWorldSize: 0.8,     // seeds the Bark-tiling dial; on cactus it sets the VERTICAL tile (ribs are U-locked)
+  fleshDamage: 0.28,      // clean↔scarred blend coverage (world-noise mask, no vertical tiling)
   controls: [
     { key: 'trunkHeight', name: 'Column growth (m/seg)', min: 0.7, max: 2.2, step: 0.1, get: (s) => s.params.firstForkHeight, set: (s, v) => { s.params.firstForkHeight = v; } },
     { key: 'armLength', name: 'Arm length (m)', min: 0.6, max: 2, step: 0.1, get: (s) => s.params.armLength, set: (s, v) => { s.params.armLength = v; } },
@@ -26,7 +27,9 @@ export const saguaro = {
     { key: 'branchiness', name: 'Arm frequency', min: 0.0, max: 0.7, step: 0.05, get: (s) => s.params.branchiness, set: (s, v) => { s.params.branchiness = v; } },
     { key: 'forkSpread', name: 'Arm splay (°)', min: 40, max: 90, step: 2, get: (s) => s.params.forkSpread, set: (s, v) => { s.params.forkSpread = v; } },
     { key: 'curlUp', name: 'Arm curl-up', min: 0.2, max: 0.85, step: 0.05, get: (s) => s.params.curlUp, set: (s, v) => { s.params.curlUp = v; } },
-    { key: 'ribCount', name: 'Ribs', min: 10, max: 26, step: 1, get: (s) => s.params.ribCount, set: (s, v) => { s.params.ribCount = Math.round(v); s.params.radialSegs = Math.max(48, Math.round(v) * 4); } },
+    // Ribs step by 4 (= ribsPerTile) so the flesh texture's 4 crest-columns keep
+    // wrapping onto the mesh ribs and the areole holes stay on the spines at every count.
+    { key: 'ribCount', name: 'Ribs', min: 12, max: 24, step: 4, get: (s) => s.params.ribCount, set: (s, v) => { s.params.ribCount = Math.round(v / 4) * 4; s.params.radialSegs = Math.max(48, s.params.ribCount * 4); } },
     { key: 'ribDepth', name: 'Rib depth', min: 0.04, max: 0.2, step: 0.01, get: (s) => s.params.ribDepth, set: (s, v) => { s.params.ribDepth = v; } },
     { key: 'trunkThickness', name: 'Column thickness', min: 0.5, max: 2, step: 0.05, get: () => 1, set: (s, v) => { s.params.trunkRadius *= v; } },
     { key: 'spineDensity', name: 'Spine density', min: 0.15, max: 1, step: 0.05, get: (s) => s.spines?.density ?? 1, set: (s, v) => { s.spines.density = v; } },
@@ -75,7 +78,8 @@ export const saguaro = {
     trunkFlare: 0,          // saguaros never flare at the base
     trunkPinch: 0.12,       // they slightly pinch inward right at the ground contact
     trunkSegRes: 6,
-    ribCount: 16,           // ~16 accordion ribs
+    ribCount: 16,           // ~16 accordion ribs (kept a multiple of ribsPerTile)
+    ribsPerTile: 4,         // flesh texture is painted with 4 rib-crest/areole columns → uScale = ribCount/4 (rib lock; see buildMergedMesh)
     ribDepth: 0.12,         // rib crest amplitude (fraction of radius)
     radialSegs: 64,         // 4 verts per rib so crests/grooves resolve smoothly
     trunks: 1,

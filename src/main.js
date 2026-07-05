@@ -1,6 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { buildTree, makeBarkMaterial, forestBarkMaterial } from './core/tree.js';
+import { buildTree, makeBarkMaterial, makeCactusFleshMaterial, forestBarkMaterial } from './core/tree.js';
 import { makeFoliageMaterial } from './core/leaf-cards.js';
 import { makeYuccaMaterial } from './core/yucca-leaves.js';
 import { makeSpineMaterial } from './core/cactus-spines.js';
@@ -112,12 +112,27 @@ async function loadSpeciesAssets(species, sunLight = null) {
   const assets = { barkTexture, barkNormal, barkRoughness, leafTexture, leafTranslucency, leafNormal, leafRoughness, leafDryTexture, leafDryestTexture };
   // Create materials once per species and cache them — reused across every
   // rebuild so shape edits never recompile the foliage node material.
-  assets.barkMat = makeBarkMaterial(assets);
   if (species.cactus) {
-    // Cactus: flesh = bark material; spines = crossed alpha cards (own material).
-    // Pass the sun so the spine glow samples the real cast-shadow map (body self-shadow).
+    // Cactus flesh: blend a CLEAN Codex skin with the real photo damage by a
+    // low-freq world-space mask (breaks the vertical damage tiling; see
+    // makeCactusFleshMaterial). Clean set is optional — falls back to plain bark.
+    const [fleshCleanAlbedo, fleshCleanNormal, fleshCleanRoughness] = await Promise.all([
+      opt(barkUrl(`${base.replace(/_skin$/, '_skin_clean')}_albedo.png`), true),
+      opt(barkUrl(`${base.replace(/_skin$/, '_skin_clean')}_normal.png`), false),
+      opt(barkUrl(`${base.replace(/_skin$/, '_skin_clean')}_roughness.png`), false),
+    ]);
+    assets.fleshCleanAlbedo = fleshCleanAlbedo;
+    assets.fleshCleanNormal = fleshCleanNormal;
+    assets.fleshCleanRoughness = fleshCleanRoughness;
+    assets.fleshDamage = species.fleshDamage ?? 0.35;
+    assets.barkMat = makeCactusFleshMaterial(assets);
+    // Spines = crossed alpha cards (own material). Pass the sun so the spine glow
+    // samples the real cast-shadow map (body self-shadow).
     assets.spineMat = makeSpineMaterial(assets, sunLight);
-  } else if (species.foliageType === 'rosette') {
+  } else {
+    assets.barkMat = makeBarkMaterial(assets);
+  }
+  if (!species.cactus && species.foliageType === 'rosette') {
     // Rosette species: one spike-leaf material at every LOD (no card system).
     const yucca = makeYuccaMaterial(assets, species.foliage);
     assets.rosetteMat = yucca.material;
@@ -591,8 +606,24 @@ async function main() {
     if (c.leafColorize !== undefined) { a.leafTintNode?.value.set(c.leafColorize); a.clusterTintNode?.value.set(c.leafColorize); }
     if (c.leafTintAmount !== undefined) { if (a.leafTintAmount) a.leafTintAmount.value = c.leafTintAmount; if (a.clusterTintAmount) a.clusterTintAmount.value = c.leafTintAmount; }
     if (c.leafAlpha !== undefined) for (const m of [a.leafMat, a.clusterMat]) if (m && m.alphaTest !== c.leafAlpha) { m.alphaTest = c.leafAlpha; m.needsUpdate = true; }
-    if (c.barkTint !== undefined) a.barkMat?.color.set(c.barkTint);
+    // Bark tint: the flesh material (cactus) overrides diffuse with colorNode, so
+    // its tint is a uniform; the standard bark material uses mat.color.
+    if (c.barkTint !== undefined) {
+      if (a.barkMat?.userData?.fleshTint) {
+        const lin = new THREE.Color(c.barkTint).convertSRGBToLinear();
+        a.barkMat.userData.fleshTint.value.set(lin.r, lin.g, lin.b); // Vector3 uniform
+      } else a.barkMat?.color.set(c.barkTint);
+    }
     if (c.barkFlat !== undefined && a.barkMat && a.barkMat.flatShading !== c.barkFlat) { a.barkMat.flatShading = c.barkFlat; a.barkMat.needsUpdate = true; }
+    // Cactus FLESH damage coverage (clean↔scarred blend). Live uniform, no rebuild.
+    if (c.fleshDamage !== undefined && a.barkMat?.userData?.fleshDamage) a.barkMat.userData.fleshDamage.value = c.fleshDamage;
+    // Seed offsets the world-space damage noise so a new generation reshuffles the
+    // scar layout (the hero sits at a fixed origin, so without this the pattern
+    // would be identical across seeds).
+    if (a.barkMat?.userData?.fleshSeed) {
+      const h = Math.abs(Math.sin((Number(c.seed) || 0) * 12.9898) * 43758.5453);
+      a.barkMat.userData.fleshSeed.value.set((h % 10), ((h * 1.37) % 10), ((h * 2.71) % 10));
+    }
     // Rosette FRONDS (Joshua/yuccas): per-age-stage tints multiply their albedo,
     // so hold them LINEAR (convertSRGBToLinear) to match the linearized texture.
     if (c.frondGreenTint !== undefined) a.frondGreenTint?.value.set(c.frondGreenTint).convertSRGBToLinear();
