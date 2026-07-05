@@ -67,6 +67,7 @@ export function controlsFromSpecies(species) {
     spineTint: 0xffffff,
   };
   for (const d of species.controls ?? []) c[d.key] = d.get(species);
+  for (const d of species.advancedControls ?? []) c[d.key] = d.get(species); // L-system Advanced dials
   return c;
 }
 
@@ -79,6 +80,7 @@ export function applySpeciesControls(species, c) {
     tileWorldSize: c.tileWorldSize ?? species.tileWorldSize,
   };
   for (const d of species.controls ?? []) if (d.key in c) d.set(s, c[d.key]);
+  for (const d of species.advancedControls ?? []) if (d.key in c) d.set(s, c[d.key]); // L-system Advanced dials
   // Advanced per-level overrides: write straight into the params arrays. Seed a
   // full 4-length array (shallow param merge in the generator REPLACES arrays, so
   // sparse holes would clobber the DEFAULTS) — missing slots keep the species value
@@ -186,15 +188,31 @@ export function buildGUI(opts) {
   }
   buildParamControls();
 
-  // Advanced: raw per-level Weber-Penn dials (ez-tree parity). Hidden for the
-  // rosette/dichotomous species — those params don't drive their generator.
+  // Advanced dials. Temperate species get raw per-level Weber-Penn params;
+  // rosette/dichotomous (L-system) species get their generator's flat params
+  // from the preset's `advancedControls` array. Hidden only if a species defines
+  // neither.
   const advanced = gui.addFolder('Advanced: branch levels');
   function buildAdvancedControls() {
     advanced.controllers.slice().forEach((ct) => ct.destroy());
     const sp = speciesMap[state.speciesKey];
     const isRosette = sp.foliageType === 'rosette';
-    advanced.domElement.style.display = isRosette ? 'none' : '';
-    if (isRosette) return;
+    const advList = sp.advancedControls;
+    advanced.domElement.style.display = (isRosette && !advList?.length) ? 'none' : '';
+    if (advanced.title) advanced.title(isRosette ? 'Advanced: L-system' : 'Advanced: branch levels');
+    if (isRosette) {
+      // Flat dichotomous-generator params (fork angle/thickness, candelabra set,
+      // trunk flare, anti-intersection, …). Same {get,set} pattern as Shape dials.
+      for (const d of advList ?? []) {
+        if (proxy[d.key] === undefined) proxy[d.key] = d.get(sp); // guard: lil-gui add() needs a defined value
+        const ct = d.dropdown
+          ? advanced.add(proxy, d.key, d.dropdown)
+          : advanced.add(proxy, d.key, d.min, d.max, d.step);
+        if (!ct) continue; // lil-gui returns undefined for a non-primitive value — skip rather than crash
+        ct.name(d.name).onChange((v) => { state.controls[d.key] = v; onChange(); });
+      }
+      return;
+    }
     const levels = sp.params?.levels ?? 3;
     const po = (state.controls.paramOverrides ||= {});
     for (const m of ADVANCED_LEVEL_PARAMS) {

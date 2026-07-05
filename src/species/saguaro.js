@@ -30,6 +30,21 @@ export const saguaro = {
     { key: 'trunkThickness', name: 'Column thickness', min: 0.5, max: 2, step: 0.05, get: () => 1, set: (s, v) => { s.params.trunkRadius *= v; } },
     { key: 'spineDensity', name: 'Spine density', min: 0.15, max: 1, step: 0.05, get: (s) => s.spines?.density ?? 1, set: (s, v) => { s.spines.density = v; } },
   ],
+  // Advanced L-system dials — the candelabra arm system + column shaping the
+  // Shape panel doesn't expose.
+  advancedControls: [
+    { key: 'armAsymmetric', name: 'Arm style', dropdown: { 'Candelabra (asymmetric)': true, 'Symmetric V': false }, get: (s) => s.params.armAsymmetric ?? true, set: (s, v) => { s.params.armAsymmetric = v; } },
+    { key: 'armMinHeightFrac', name: 'Arm min height', min: 0, max: 0.8, step: 0.05, get: (s) => s.params.armMinHeightFrac ?? 0.2, set: (s, v) => { s.params.armMinHeightFrac = v; } },
+    { key: 'armMaxOrder', name: 'Arm max order', min: 1, max: 4, step: 1, get: (s) => s.params.armMaxOrder ?? 1, set: (s, v) => { s.params.armMaxOrder = Math.round(v); } },
+    { key: 'armGenerations', name: 'Arm length (segments)', min: 0, max: 8, step: 1, get: (s) => s.params.armGenerations ?? 5, set: (s, v) => { s.params.armGenerations = Math.round(v); } },
+    { key: 'armFalloff', name: 'Arm falloff / gen', min: 0.5, max: 1, step: 0.02, get: (s) => s.params.armFalloff ?? 0.9, set: (s, v) => { s.params.armFalloff = v; } },
+    { key: 'forkTriChance', name: '2-arm chance', min: 0, max: 0.6, step: 0.05, get: (s) => s.params.forkTriChance ?? 0.15, set: (s, v) => { s.params.forkTriChance = v; } },
+    { key: 'forkRadiusKeep', name: 'Arm thickness keep', min: 0.5, max: 1, step: 0.02, get: (s) => s.params.forkRadiusKeep ?? 0.72, set: (s, v) => { s.params.forkRadiusKeep = v; } },
+    { key: 'forkBaseScale', name: 'Arm base neck', min: 0.4, max: 1.2, step: 0.02, get: (s) => s.params.forkBaseScale ?? 0.58, set: (s, v) => { s.params.forkBaseScale = v; } },
+    { key: 'branchRepel', name: 'Branch repel', min: 0, max: 1.5, step: 0.05, get: (s) => s.params.branchRepel ?? 0.6, set: (s, v) => { s.params.branchRepel = v; } },
+    { key: 'trunkPinch', name: 'Base pinch', min: 0, max: 0.4, step: 0.02, get: (s) => s.params.trunkPinch ?? 0.12, set: (s, v) => { s.params.trunkPinch = v; } },
+    { key: 'trunkSegRes', name: 'Column ring detail', min: 3, max: 16, step: 1, get: (s) => s.params.trunkSegRes ?? 9, set: (s, v) => { s.params.trunkSegRes = Math.round(v); } },
+  ],
   foliage: false, // spines are built separately (cactus path); no rosette
   // Spine areoles (crossed alpha cards marching down each rib crest — cactus-spines.js).
   spines: {

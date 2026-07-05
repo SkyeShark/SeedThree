@@ -28,6 +28,19 @@ export const joshuaTree = {
     { key: 'rosetteSize', name: 'Rosette size', min: 0.4, max: 1.3, step: 0.05, get: (s) => s.foliage.leafLen, set: (s, v) => { s.foliage.leafLen = v; } },
     { key: 'rosetteVar', name: 'Rosette variation', min: 0, max: 0.4, step: 0.02, get: (s) => s.foliage.leafLenVar, set: (s, v) => { s.foliage.leafLenVar = v; } },
   ],
+  // Advanced L-system dials (rendered in the Advanced folder) — the dichotomous
+  // params the Shape panel doesn't already expose.
+  advancedControls: [
+    { key: 'armFalloff', name: 'Arm falloff / gen', min: 0.5, max: 1, step: 0.02, get: (s) => s.params.armFalloff ?? 0.86, set: (s, v) => { s.params.armFalloff = v; } },
+    { key: 'forkTriChance', name: 'Trident chance', min: 0, max: 0.6, step: 0.05, get: (s) => s.params.forkTriChance ?? 0.15, set: (s, v) => { s.params.forkTriChance = v; } },
+    { key: 'forkRadiusKeep', name: 'Arm thickness keep', min: 0.5, max: 1, step: 0.02, get: (s) => s.params.forkRadiusKeep ?? 0.86, set: (s, v) => { s.params.forkRadiusKeep = v; } },
+    { key: 'forkBaseScale', name: 'Arm base neck', min: 0.4, max: 1.2, step: 0.02, get: (s) => s.params.forkBaseScale ?? 1.0, set: (s, v) => { s.params.forkBaseScale = v; } },
+    { key: 'branchRepel', name: 'Branch repel', min: 0, max: 1.5, step: 0.05, get: (s) => s.params.branchRepel ?? 0.7, set: (s, v) => { s.params.branchRepel = v; } },
+    { key: 'trunkFlare', name: 'Trunk base flare', min: 1, max: 3, step: 0.05, get: (s) => s.params.trunkFlare ?? 1.7, set: (s, v) => { s.params.trunkFlare = v; } },
+    { key: 'trunkPinch', name: 'Trunk base pinch', min: 0, max: 0.4, step: 0.02, get: (s) => s.params.trunkPinch ?? 0, set: (s, v) => { s.params.trunkPinch = v; } },
+    { key: 'trunkSegRes', name: 'Trunk ring detail', min: 3, max: 16, step: 1, get: (s) => s.params.trunkSegRes ?? 9, set: (s, v) => { s.params.trunkSegRes = Math.round(v); } },
+    { key: 'trunkSplayDeg', name: 'Multi-trunk splay (°)', min: 0, max: 40, step: 1, get: (s) => s.params.trunkSplayDeg ?? 14, set: (s, v) => { s.params.trunkSplayDeg = v; } },
+  ],
   foliage: {
     leafLen: 0.5,        // rosette radius (user default) — still >> arm radius, hides tips
     leafLenVar: 0.15,
