@@ -12,7 +12,7 @@ import {
   BufferGeometry, BufferAttribute, InstancedBufferAttribute, InstancedMesh, MeshSSSNodeMaterial,
   Matrix4, Quaternion, Vector3, Color, DoubleSide,
 } from 'three/webgpu';
-import { positionWorld, normalView, mix, normalize, uniform, texture, attribute, float, normalMap, cameraViewMatrix, vec3, vec4 } from 'three/tsl';
+import { positionWorld, normalView, mix, normalize, uniform, texture, attribute, float, normalMap, cameraViewMatrix, vec3, vec4, luminance, color } from 'three/tsl';
 import { foliageWindPosition, WIND_DIR } from './wind.js';
 
 // Per-instance random "thickness" (0.4–1) so leaves don't all transmit identically
@@ -113,6 +113,34 @@ export function makeFoliageMaterial(assets, cfg) {
   });
   if (texNormal) mat.normalMap = texNormal; // also exports to glTF
   if (texRoughness) { mat.roughnessMap = texRoughness; mat.roughness = 1.0; }
+
+  // Tint as a luminance-preserving COLORIZE (not a multiply/overlay). The base is
+  // the texture × the species' subtle baseline tint (default look preserved); the
+  // user tint interpolates the base's color toward `tintNode` by `tintAmount`,
+  // keeping the leaf's own light/dark detail via its luminance. amount 0 = raw
+  // texture; amount 1 = fully recolored (e.g. green → autumn red without going
+  // muddy). The ×1.7 lifts the mid-luminance recolor so a saturated tint doesn't
+  // darken the canopy. Live-editable via the returned uniforms.
+  const tintNode = uniform(new Color(cfg.leafColorize ?? 0xffffff));
+  const tintAmount = uniform(cfg.leafTintAmount ?? 0);
+  if (tex) {
+    const texel = texture(tex);
+    // Baseline species tint, multiplied in LINEAR space to match the old
+    // constructor `color:` path (the sampled sRGB texture is already linearised, so
+    // the tint must be too — else the canopy desaturates/greys).
+    const tl = new Color(c.tint).convertSRGBToLinear();
+    const base = texel.rgb.mul(vec3(tl.r, tl.g, tl.b));
+    // Luminance-PRESERVING colorize: scale the tint so the recolored leaf keeps the
+    // base's own brightness (recolor luminance == base luminance), then interpolate.
+    // Dividing by the tint's luminance is what stops a dark/saturated tint (e.g. red,
+    // luminance ~0.2) from crushing the whole canopy to black — it only swaps hue.
+    const recolor = tintNode.mul(luminance(base).div(luminance(tintNode).max(0.08))).clamp(0, 1);
+    mat.colorNode = mix(base, recolor, tintAmount);
+    // Overriding colorNode detaches the map from the alpha path, so restore the
+    // cutout explicitly: opacity = the leaf texture's alpha (alphaTest still clips it).
+    mat.opacityNode = texel.a;
+  }
+
   const centerUniform = uniform(new Vector3());
   // Up-biased canopy dome: no foliage normal ever points down (down-facing
   // normals sample the dark ground hemisphere → pitch-black lower canopy).
@@ -154,7 +182,7 @@ export function makeFoliageMaterial(assets, cfg) {
     color: [0.42, 0.62, 0.24],
     map: texTranslucency ?? null,
   };
-  return { material: mat, centerUniform };
+  return { material: mat, centerUniform, tintNode, tintAmount };
 }
 
 export function buildFoliage(terminalStems, cfg, rng, material, centerUniform) {

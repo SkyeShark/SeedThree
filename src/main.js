@@ -22,7 +22,8 @@ import { controlsFromSpecies, applySpeciesControls, buildGUI } from './ui/contro
 import { mountPanelFX } from './ui/panel-fx.js';
 import { mountAmbience } from './audio/ambience.js';
 import './ui/theme.css';
-import { fog as tslFog, positionWorld, uniform, float } from 'three/tsl';
+import { fog as tslFog, positionWorld, uniform, float, pass, mrt, output, normalView, mix, vec3, vec4 } from 'three/tsl';
+import { ao } from 'three/addons/tsl/display/GTAONode.js';
 
 const hud = document.getElementById('hud');
 const errBox = document.getElementById('err');
@@ -123,8 +124,10 @@ async function loadSpeciesAssets(species, sunLight = null) {
     // Two foliage materials: single-leaf (LOD0) and cluster (LOD1+). Cached & reused.
     const leafFol = makeFoliageMaterial(assets, { ...species.foliage, mode: 'leaves' });
     assets.leafMat = leafFol.material; assets.leafCenter = leafFol.centerUniform;
+    assets.leafTintNode = leafFol.tintNode; assets.leafTintAmount = leafFol.tintAmount;
     const clusterFol = makeFoliageMaterial(assets, { ...species.foliage, mode: 'clusters' });
     assets.clusterMat = clusterFol.material; assets.clusterCenter = clusterFol.centerUniform;
+    assets.clusterTintNode = clusterFol.tintNode; assets.clusterTintAmount = clusterFol.tintAmount;
   }
   assetCache.set(species.name, assets);
   return assets;
@@ -254,7 +257,72 @@ async function main() {
   scaleRef.position.set(5, 0.9, 3);
   scaleRef.visible = false;
   scene.add(scaleRef);
-  const envState = { showScaleRef: false, fog: true, forestCount: 64, spom: false }; // SPOM parallax terrain: OFF by default (expensive march)
+  const envState = { showScaleRef: false, fog: true, forestCount: 64, spom: false, gtao: false, aa: true }; // SPOM + GTAO OFF by default; MSAA antialiasing ON
+
+  // ---- Post-processing: Ground-Truth Ambient Occlusion ----------------------
+  // Canonical three.js WebGPU GTAO: an MRT scene pass exposes color + view
+  // normals + depth; the GTAO node computes horizon-based occlusion which we
+  // multiply into the scene color. It grounds the tree — contact darkening in
+  // leaf clusters, branch crotches, where trunks meet terrain. Toggle sits next
+  // to SPOM (default OFF).
+  //
+  // Two DISTINCT artifacts the far-LOD impostor/forest/cluster cards would suffer
+  // (they're flat billboards with BENT normals — rounded outward so a flat card
+  // lights like a volume):
+  //   1. BLACKOUT (whole card black) — normal-driven: the bent normals point away
+  //      from camera, so GTAO reads the surface as fully self-occluded (AO→0).
+  //   2. CREASE SHADOWS (dark X-seam) — depth-driven: AO darkens the concave
+  //      valley where the two crossed cards intersect — the very seam bent normals
+  //      exist to hide.
+  // Both are fixed the same correct way: EXCLUDE those cards from AO with a mask.
+  // The scene pass carries an extra `aomask` channel — real geometry writes 1
+  // (apply AO), the baked cards override it to 0 (see impostor.js/branch-cards.js
+  // mrtNode). The composite lerps AO→1 where mask=0, so cards keep their bent
+  // normals (no crease) and never darken (no blackout), while the hero mesh, leaf
+  // cards, bark and terrain get full real-normal AO.
+  //
+  // The scene ALWAYS renders through the pipeline (never a direct canvas render):
+  // that keeps the card materials' 3-target MRT output in an MRT context, so the
+  // GTAO-off path can't hit a single-target mismatch (which would drop the cards).
+  // The toggle just swaps the pipeline's output node (AO composite vs plain
+  // color) — flipping it recompiles once. RenderPipeline applies tone mapping +
+  // color space at output, so the pass renders linear HDR and our ACES grade
+  // still lands once at the end.
+  const postProcessing = new THREE.RenderPipeline(renderer);
+  const scenePass = pass(scene, camera);
+  scenePass.setMRT(mrt({ output, normal: normalView, aomask: float(1) })); // default 1: real geo gets AO
+  const scenePassColor = scenePass.getTextureNode('output');
+  const scenePassNormal = scenePass.getTextureNode('normal');
+  const scenePassDepth = scenePass.getTextureNode('depth');
+  const aoMask = scenePass.getTextureNode('aomask'); // 1 = apply AO, 0 = card (skip)
+  const aoPass = ao(scenePassDepth, scenePassNormal, camera);
+  aoPass.resolutionScale = 0.5; // half-res AO: plenty for foliage, ~4× cheaper
+  aoPass.radius.value = 0.5;    // meters — contact radius across leaf clusters/crotches
+  aoPass.distanceExponent.value = 1.0;
+  // Card pixels (mask 0) → AO forced to 1 (no darkening); real geo (mask 1) → real AO.
+  const aoFactor = mix(float(1), aoPass.getTextureNode().r, aoMask.r);
+  // AO factor is a scalar — broadcast to rgb (keep alpha) before multiplying.
+  const AO_OUTPUT = scenePassColor.mul(vec4(vec3(aoFactor), 1));
+  const setAOOutput = () => { // swap composite on toggle (one-time recompile)
+    postProcessing.outputNode = envState.gtao ? AO_OUTPUT : scenePassColor;
+    postProcessing.needsUpdate = true;
+  };
+  setAOOutput();
+  // Always render through the pipeline (see note above); the toggle only changes
+  // which output node is composited, never the render path.
+  const renderFrame = () => postProcessing.render();
+  // Antialiasing toggle (Environment, like SPOM/GTAO). Because the scene now
+  // always renders into the pipeline's pass, MSAA lives on that pass — it inherits
+  // the renderer's `antialias: true` (4 samples) by default. Toggling flips the
+  // pass's sample count, recreates its render target at the new count, and rebuilds
+  // the pipeline. Default ON.
+  const applyAA = () => {
+    const samples = envState.aa ? 4 : 0;
+    if ((scenePass.options.samples ?? 4) === samples) return;
+    scenePass.options.samples = samples;
+    scenePass.renderTarget.dispose();  // force the RT to recreate at the new sample count
+    postProcessing.needsUpdate = true; // rebuild the pass + composite pipeline
+  };
   const windState = { strength: 0.5, speed: 1.0 };
   const applyWind = () => { windStrength.value = windState.strength; windSpeed.value = windState.speed; };
   applyWind();
@@ -436,12 +504,40 @@ async function main() {
     lod2Density: 1, lod2Prune: 0.35,
     cardRes: 512, cardVariants: 3,
     billboardRes: 1024,
+    mobileTarget: false, // card-first LOD ladder (LOD2 baked cards → LOD0 + 2 cheaper LODs)
   };
   let currentTree = null;
   let needsRebuild = false;
   let rebuilding = false;
   let lastChangeAt = 0;
   const requestRebuild = () => { needsRebuild = true; lastChangeAt = performance.now(); };
+
+  // Mobile Performance Target LOD wiring. The full-detail mesh LODs (hiddenInApp)
+  // are parked at an unreachable distance so THREE.LOD never selects them — they
+  // stay built (bake source + what the shape/foliage dials edit) but never render.
+  // The baked-card LOD2 becomes the visible near LOD (distance 0); the two extra
+  // card LODs (LOD3/LOD4) and the billboard sit beyond it. The Optimization
+  // distance sliders retarget by name: LOD1→LOD3, LOD2→LOD4, Billboard→BB. No-op
+  // (returns) in desktop mode, so the normal LOD distance logic is untouched.
+  const HIDE_DIST = 1e7;
+  // A tree is a "mobile card tree" only if it was actually built with the card
+  // ladder (hidden mesh LODs). Rosette/desert species (buildDichotomousTree)
+  // ignore mobileTarget — they have no branch cards — so their normal cone ladder
+  // must be left alone even while the toggle is on. Every mobile LOD path gates on
+  // this so desert plants gracefully fall back to desktop LOD behaviour.
+  const isMobileTree = (tree) => !!tree?.levels?.some((l) => l.object.userData.hiddenInApp);
+  function applyLodMobile(tree) {
+    if (!tree || !optState.mobileTarget || !isMobileTree(tree)) return;
+    for (const l of tree.levels) {
+      const nm = l.object.userData.lodName;
+      if (l.object.userData.hiddenInApp) l.distance = HIDE_DIST; // LOD0/LOD1 mesh: never shown
+      else if (nm === 'LOD2') l.distance = 0;                    // near card LOD (new effective LOD0)
+      else if (nm === 'LOD3') l.distance = optState.lod1Dist;    // extra card #1
+      else if (nm === 'LOD4') l.distance = optState.lod2Dist;    // extra card #2
+      else if (nm === 'BB') l.distance = optState.billboardDist;
+    }
+    tree.levels.sort((a, b) => a.distance - b.distance); // THREE.LOD selects assuming ascending order
+  }
 
   // Baked branch cards, cached per (species, leaf params, levels) — built from a
   // FIXED exemplar seed inside bakeBranchCards, so reseeding reuses the cache.
@@ -484,7 +580,10 @@ async function main() {
     const a = assetCache.get(SPECIES[state.speciesKey].name);
     if (!a) return;
     const c = state.controls;
-    if (c.leafTint !== undefined) { a.leafMat?.color.set(c.leafTint); a.clusterMat?.color.set(c.leafTint); }
+    // Leaf tint = luminance-preserving colorize (uniforms, no recompile): a target
+    // color + an amount that interpolates the leaf texture toward it.
+    if (c.leafColorize !== undefined) { a.leafTintNode?.value.set(c.leafColorize); a.clusterTintNode?.value.set(c.leafColorize); }
+    if (c.leafTintAmount !== undefined) { if (a.leafTintAmount) a.leafTintAmount.value = c.leafTintAmount; if (a.clusterTintAmount) a.clusterTintAmount.value = c.leafTintAmount; }
     if (c.leafAlpha !== undefined) for (const m of [a.leafMat, a.clusterMat]) if (m && m.alphaTest !== c.leafAlpha) { m.alphaTest = c.leafAlpha; m.needsUpdate = true; }
     if (c.barkTint !== undefined) a.barkMat?.color.set(c.barkTint);
     if (c.barkFlat !== undefined && a.barkMat && a.barkMat.flatShading !== c.barkFlat) { a.barkMat.flatShading = c.barkFlat; a.barkMat.needsUpdate = true; }
@@ -517,6 +616,7 @@ async function main() {
         lod1Pct: optState.lod1Pct, lod2Pct: optState.lod2Pct,
         lod1Density: optState.lod1Density, lod1Prune: optState.lod1Prune,
         lod2Density: optState.lod2Density, lod2Prune: optState.lod2Prune,
+        mobileTarget: optState.mobileTarget,
         branchCards,
       }, reuse);
       const speciesChanged = forestSpecies !== state.speciesKey;
@@ -524,6 +624,7 @@ async function main() {
       if (currentTree && currentTree !== group) { scene.remove(currentTree); disposeTree(currentTree); }
       currentTree = group;
       if (!group.parent) scene.add(group);
+      applyLodMobile(group); // mobile: park hidden mesh LODs, retarget card-LOD distances
       // Grove = the species' default tree, built ONCE per selection; hero edits
       // (settings/seed) never touch it. Frozen until you switch species.
       if (speciesChanged) {
@@ -556,12 +657,24 @@ async function main() {
   const refreshHud = () => { hud.textContent = `${fpsDisplay} fps\n${statsText}`; };
   function updateStats(species, group) {
     const u = group.userData;
-    const counts = group.levels.map((l) => countTriangles(l.object));
-    const lodLine = group.levels.map((l, i) => {
-      const nm = l.object.userData.lodName ?? '?';
-      const pct = i === 0 ? '' : ` (${Math.max(1, Math.round((100 * counts[i]) / counts[0]))}%)`;
+    // Show only the levels the app actually RENDERS. Mobile Target parks the full
+    // mesh LODs off-screen (hiddenInApp) — skip those, and renumber the visible
+    // levels 0,1,2… by draw order so the HUD reads LOD0/LOD1/LOD2 even though the
+    // near one is internally the baked-card LOD2. The billboard stays 'BB'.
+    const visible = group.levels
+      .filter((l) => !l.object.userData.hiddenInApp)
+      .slice()
+      .sort((a, b) => a.distance - b.distance);
+    const tri = (l) => countTriangles(l.object);
+    const ref = visible.length ? tri(visible[0]) : 1;
+    let n = 0;
+    const lodLine = visible.map((l, i) => {
+      const isBB = l.object.userData.isBillboard || l.object.userData.lodName === 'BB';
+      const nm = isBB ? 'BB' : `LOD${n++}`;
+      const c = tri(l);
+      const pct = i === 0 ? '' : ` (${Math.max(1, Math.round((100 * c) / ref))}%)`;
       const d = l.distance ? ` @${Math.round(l.distance)}m` : '';
-      return `${nm} ${counts[i].toLocaleString()}△${pct}${d}`;
+      return `${nm} ${c.toLocaleString()}△${pct}${d}`;
     }).join('  ·  ');
     statsText =
       `${species.name}  ·  ${species.latin}\n` +
@@ -643,6 +756,7 @@ async function main() {
     // other levels (set in frameCameraToTree) so it never pops in while framed.
     const bbDist = tree.userData.lodBaseDist ? tree.userData.lodBaseDist * 5.5 : optState.billboardDist;
     tree.addLevel(bb, bbDist, 0.05);
+    applyLodMobile(tree); // mobile: re-park hidden LODs + set BB to billboardDist after the new level shuffles the order
     billboardDirty = false; // impostor now matches the current plant
     // Fold the freshly-baked billboard into the grove ONLY on the first bake after
     // a species switch — the grove is otherwise frozen (never rebuilt on edits).
@@ -692,8 +806,15 @@ async function main() {
     tree.getWorldPosition(_frameOrigin);
     const baseDist = camera.position.distanceTo(_frameOrigin);
     tree.userData.lodBaseDist = baseDist;
-    const LOD_MULT = [0, 1.5, 3.0, 5.5];
-    tree.levels.forEach((lv, i) => { if (i < LOD_MULT.length) lv.distance = LOD_MULT[i] * baseDist; });
+    if (optState.mobileTarget && isMobileTree(tree)) {
+      // Mobile uses ABSOLUTE slider distances (not framing-relative) so the
+      // Optimization sliders stay meaningful; park hidden LODs + place the cards.
+      tree.userData.lodBaseDist = 0; // billboard bake reads billboardDist, not baseDist*5.5
+      applyLodMobile(tree);
+    } else {
+      const LOD_MULT = [0, 1.5, 3.0, 5.5];
+      tree.levels.forEach((lv, i) => { if (i < LOD_MULT.length) lv.distance = LOD_MULT[i] * baseDist; });
+    }
     controls.update();
   }
 
@@ -721,11 +842,11 @@ async function main() {
       // loop re-picks a different, un-compiled level and hangs AFTER we hide.
       if (currentTree) { currentTree.autoUpdate = false; camera.updateMatrixWorld(); currentTree.update(camera); }
       await stageStep('Compiling shaders', 0.66);   // the big one — the pipeline compile blocks on the next render
-      await renderer.renderAsync(scene, camera);    // force the hero pipeline compile now, behind the overlay
+      postProcessing.render();                       // force the hero pipeline compile now, behind the overlay (always via pipeline — cards' MRT needs an MRT context)
       await stageStep('Baking distant impostor', 0.86);
       clearTimeout(bakeTimer);                      // fold the normally-deferred billboard bake in too
       await bakeBillboard();                        // its RT readback + material compile also hide here
-      await renderer.renderAsync(scene, camera);
+      postProcessing.render();                       // re-render incl. the freshly-baked billboard card
       setStage('Ready', 1);
       // Hold until the render LOOP itself is producing smooth frames — the heavy
       // Joshua pipelines compile in the loop's first render() after we return, not
@@ -1011,11 +1132,17 @@ async function main() {
       // Keep switch distances monotonic, then write them into the live LOD.
       optState.lod2Dist = Math.max(optState.lod2Dist, optState.lod1Dist + 5);
       optState.billboardDist = Math.max(optState.billboardDist, optState.lod2Dist + 10);
-      for (const l of currentTree.levels) {
-        const nm = l.object.userData.lodName;
-        if (nm === 'LOD1') l.distance = optState.lod1Dist;
-        else if (nm === 'LOD2') l.distance = optState.lod2Dist;
-        else if (nm === 'BB') l.distance = optState.billboardDist;
+      if (optState.mobileTarget && isMobileTree(currentTree)) {
+        // Retarget (keep-names): LOD1→extra card #1 (LOD3), LOD2→extra card #2
+        // (LOD4), Billboard→BB. The near card LOD (LOD2) stays fixed at 0.
+        applyLodMobile(currentTree);
+      } else {
+        for (const l of currentTree.levels) {
+          const nm = l.object.userData.lodName;
+          if (nm === 'LOD1') l.distance = optState.lod1Dist;
+          else if (nm === 'LOD2') l.distance = optState.lod2Dist;
+          else if (nm === 'BB') l.distance = optState.billboardDist;
+        }
       }
       syncFromState(); // reflect any clamping back into the sliders
       updateStatsFromCurrent();
@@ -1040,6 +1167,8 @@ async function main() {
     onSun: () => updateSun(),
     onScaleRef: (v) => { scaleRef.visible = v; },
     onFog: () => applyFog(),
+    onGtao: () => setAOOutput(), // swap composite (AO vs plain color) + recompile once
+    onAA: () => applyAA(),       // toggle MSAA on the scene pass
     windState,
     onWind: () => applyWind(),
     onForest: () => updateForest(currentTree),
@@ -1051,7 +1180,7 @@ async function main() {
       try {
         await nextPaint();
         await buildBiome(SPECIES[state.speciesKey]);
-        await renderer.renderAsync(scene, camera);
+        postProcessing.render();
         await waitForSmoothFrames();
       } finally { hideLoading(); }
     },
@@ -1075,7 +1204,7 @@ async function main() {
     // canvas in the same task (the drawing buffer isn't preserved after present).
     onExportPNG: async () => {
       try {
-        await renderer.renderAsync(scene, camera);
+        postProcessing.render(); // render through the pipeline (AO if enabled)
         const bmp = await createImageBitmap(renderer.domElement);
         const oc = new OffscreenCanvas(bmp.width, bmp.height);
         oc.getContext('2d').drawImage(bmp, 0, 0);
@@ -1120,7 +1249,7 @@ async function main() {
     renderer.setSize(innerWidth, innerHeight);
   });
 
-  await renderer.renderAsync(scene, camera); // first frame even if backgrounded
+  postProcessing.render(); // first frame even if backgrounded (always via pipeline)
   let fpsFrames = 0;
   let fpsT0 = performance.now();
   renderer.setAnimationLoop(() => {
@@ -1156,10 +1285,10 @@ async function main() {
         currentTree.levels.forEach((l, i) => { l.object.visible = i === idx; });
       }
     }
-    renderer.render(scene, camera); // billboard bake runs OFF-THREAD (worker) → viewer paints every frame
+    renderFrame(); // GTAO post-pass or direct; billboard bake is OFF-THREAD (worker) → viewer paints every frame
   });
 
-  Object.assign(window, { THREE, scene, camera, renderer, state, optState, rebuild: () => { needsRebuild = true; }, _rebuildNow: rebuild, applyPreset });
+  Object.assign(window, { THREE, scene, camera, renderer, state, optState, envState, postProcessing, aoPass, scenePass, setAOOutput, applyAA, rebuild: () => { needsRebuild = true; }, _rebuildNow: rebuild, applyPreset });
 }
 
 main().catch((e) => fail(`Init failed: ${e?.stack || e}`));

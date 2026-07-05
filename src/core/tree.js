@@ -169,7 +169,7 @@ function lodLevels(species, opts = {}) {
   // SpeedTree "fewer & bigger" enlargement — that made LOD1/LOD2 leaves visibly larger
   // than LOD0). LODs get FEWER leaves, never bigger ones. growFor is now a no-op (1×).
   const growFor = () => 1.0;
-  return [
+  const base = [
     { name: 'LOD0', distance: 0, radialScale: q, ringStride: 1, foliage: f },
     // LOD1 — TRUE GEOMETRY at the pct1 budget: real twigs + real single leaves,
     // fewer and bigger (survivors grow to hold canopy volume). Leaf count scales
@@ -199,6 +199,44 @@ function lodLevels(species, opts = {}) {
       cards: { growScale: growFor(keep2), keepFraction: keep2 },
     },
   ];
+  if (!opts.mobileTarget) return base;
+  // MOBILE PERFORMANCE TARGET: keep the FULL desktop ladder intact — LOD0 (mesh)
+  // and LOD1 (mesh) are still built exactly the same (they're the bake source and
+  // what Shape/Foliage/Advanced edit), but flagged hiddenInApp so the app never
+  // renders them. LOD2's baked cards become the visible near LOD (distance 0).
+  // Then two cheaper card levels (appOnly — not exported) are appended. The whole
+  // point of the LOD1/LOD2 sliders in mobile mode is to tune THESE two extras, so
+  // they retarget cleanly across ALL four attributes (distance/budget/density/
+  // prune) and the visible near LOD is DECOUPLED from them:
+  //   near LOD (app-labelled LOD0) = fixed reference model (not slider-driven)
+  //   'LOD1 …' sliders → extra card LOD #1 (internal LOD3, app-labelled LOD1)
+  //   'LOD2 …' sliders → extra card LOD #2 (internal LOD4, app-labelled LOD2)
+  //   'Billboard at (m)' → the billboard (unchanged)
+  // (Rosettes have no branch cards → buildDichotomousTree ignores mobileTarget.)
+  const NEAR_BUDGET = 0.15; // fixed budget frac for the reference near model
+  base[0].hiddenInApp = true;
+  base[1].hiddenInApp = true;
+  // Near visible LOD = the reference mobile model: full-density cards over the
+  // thinned twig skeleton, at a FIXED budget/prune so the LOD1/LOD2 sliders no
+  // longer bleed into it (that was the mis-targeting — the desktop LOD2 recipe
+  // read lod2Pct/lod2Density/lod2Prune).
+  base[2].distance = 0;
+  base[2].budgetFrac = NEAR_BUDGET;
+  base[2].prune = 0.35;
+  base[2].cards = { growScale: growFor(1), keepFraction: 1 };
+  const q2 = Math.min(1, q * pct2 * 2.4);
+  // One cheaper card level. budget% × density scales the branch budget as a
+  // fraction of the near model; keepMul is the baseline card thinning per level.
+  const extraCard = (name, dist, pct, density, prune, keepMul, stride) => ({
+    name, distance: dist, prune, keepTwigs: true, appOnly: true,
+    budgetFrac: Math.max(0.02, (pct / 100) * density * NEAR_BUDGET),
+    radialScale: Math.min(1, q2 * keepMul), ringStride: stride,
+    foliage: clusters,
+    cards: { growScale: growFor(keepMul * density), keepFraction: keepMul * density },
+  });
+  base.push(extraCard('LOD3', opts.lod1Dist ?? 35, opts.lod1Pct ?? 50, opts.lod1Density ?? 1, opts.lod1Prune ?? 0, 0.6, 3));
+  base.push(extraCard('LOD4', opts.lod2Dist ?? 70, opts.lod2Pct ?? 15, opts.lod2Density ?? 1, opts.lod2Prune ?? 0.35, 0.35, 4));
+  return base;
 }
 
 /**
@@ -233,6 +271,8 @@ export function buildTree(species, seed, assets = {}, lodOpts = {}, reuse = null
     // _LOD-suffix naming: Unity/Unreal auto-detect these on import.
     level.name = `${speciesSlug}_${lv.name}`;
     level.userData.lodName = lv.name;
+    level.userData.hiddenInApp = !!lv.hiddenInApp; // mobile: mesh LODs kept but never rendered
+    level.userData.appOnly = !!lv.appOnly;         // mobile: extra card LODs, not exported
 
     // Baked branch cards replace terminal twig foliage; unless the level keeps
     // its twig skeleton (keepTwigs — the hybrid look), the terminal cylinders

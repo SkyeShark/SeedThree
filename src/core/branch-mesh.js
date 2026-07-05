@@ -154,24 +154,44 @@ export function buildBranchGeometry(stems, opts = {}) {
 
     // Tip cap: seal the terminal ring when it ends at a real radius (editable
     // taper < 1, or a level that doesn't close to a point). Default trees taper
-    // to ~0.002 so the threshold skips them and no cap tris are spent. A single
-    // centre vertex + a triangle fan, normal along the outward tangent.
+    // to ~0.002 so the threshold skips them and no cap tris are spent.
+    //
+    // The cap gets its OWN ring of vertices (duplicating the terminal cross-
+    // section) with a FLAT outward-tangent normal and a PLANAR DISC uv projection
+    // — NOT the side wall's circumferential U (0..uScale), which fanned to a point
+    // smears the bark into a radial star. The disc uv radius is tipR/tileWorldSize
+    // so cap texel density matches the walls; it's centred at tile (0.5, 0.5).
     let extraVerts = 0;
     const tipR = radii[rings - 1];
     if (tipR > 0.012) {
       const tp = points[rings - 1];
-      tangentAt(points, rings - 1, tan); // outward tip normal
-      const centerIdx = vertBase + rings * ringVerts;
+      tangentAt(points, rings - 1, tan); // outward tip normal (the whole cap faces +tangent)
+      const axN = fN[rings - 1], axB = fB[rings - 1];
+      const capUVr = tipR / tileWorldSize;
+      const capBase = vertBase + rings * ringVerts; // first cap-ring vertex index
+      for (let j = 0; j <= seg; j++) {
+        const theta = (j / seg) * Math.PI * 2;
+        const cos = Math.cos(theta), sin = Math.sin(theta);
+        const lobeMod = lobes > 0 ? 1 + lobeDepth * Math.cos(lobes * theta) : 1;
+        const rr = tipR * lobeMod;
+        radial.copy(axN).multiplyScalar(cos).addScaledVector(axB, sin);
+        pos.copy(tp).addScaledVector(radial, rr);
+        positions.push(pos.x, pos.y, pos.z);
+        normals.push(tan.x, tan.y, tan.z);
+        uvs.push(0.5 + capUVr * cos, 0.5 + capUVr * sin);
+        winds.push(lastWind);
+        centers.push(tp.x, tp.y, tp.z);
+      }
+      const centerIdx = capBase + (seg + 1);
       positions.push(tp.x, tp.y, tp.z);
       normals.push(tan.x, tan.y, tan.z);
-      uvs.push(0.5 * uScale, vAlong / tileV);
+      uvs.push(0.5, 0.5);
       winds.push(lastWind);
       centers.push(tp.x, tp.y, tp.z);
-      const ringStart = vertBase + (rings - 1) * ringVerts;
       // Ring verts wind CLOCKWISE around +tangent (radial spins N→B about −T), so
       // centre→ring[j+1]→ring[j] is CCW as seen from outside the tip → front face.
-      for (let j = 0; j < seg; j++) indices.push(centerIdx, ringStart + j + 1, ringStart + j);
-      extraVerts = 1;
+      for (let j = 0; j < seg; j++) indices.push(centerIdx, capBase + j + 1, capBase + j);
+      extraVerts = (seg + 1) + 1;
     }
 
     vertBase += rings * ringVerts + extraVerts;

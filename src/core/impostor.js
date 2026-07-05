@@ -28,7 +28,7 @@ import {
   CanvasTexture, MeshBasicMaterial, MeshBasicNodeMaterial, MeshSSSNodeMaterial,
   PlaneGeometry, Mesh, Group, DoubleSide, SRGBColorSpace, NoColorSpace,
 } from 'three/webgpu';
-import { texture, uniform, float, vec3, vec4, mix, positionWorld, normalWorld, cameraViewMatrix, modelWorldMatrix } from 'three/tsl';
+import { texture, uniform, float, vec3, vec4, mix, positionWorld, normalWorld, cameraViewMatrix, modelWorldMatrix, mrt, output, normalView } from 'three/tsl';
 import { windStrength } from './wind.js';
 
 const linToSrgb = (u) => {
@@ -208,6 +208,12 @@ function makeCardMaterial(t, cardH) {
   const detail = texture(t.normal).xyz.mul(2).sub(1);
   const nWorld = base.add(detail.mul(0.55)).normalize();
   mat.normalNode = cameraViewMatrix.mul(vec4(nWorld, 0)).xyz.normalize();
+  // GTAO exclusion: this flat billboard keeps its bent normalNode for lighting,
+  // but writes aomask=0 to the scene MRT so screen-space AO skips it entirely —
+  // no whole-card blackout (bent normals face away from camera) and no dark
+  // X-seam where the crossed cards intersect (the crease bent normals hide). The
+  // scene pass carries {output, normal, aomask}; real geometry defaults aomask=1.
+  mat.mrtNode = mrt({ output, normal: normalView, aomask: float(0) });
   // Backlit transmission from the baked translucency — the distant tree keeps
   // glowing when the sun is behind it, matching the near LODs.
   mat.thicknessColorNode = texture(t.trans).r.mul(uniform(new Color().setRGB(...TRANSMIT)));

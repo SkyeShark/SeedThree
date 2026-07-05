@@ -48,7 +48,8 @@ export function controlsFromSpecies(species) {
     // ez-tree parity leaf/bark editing. Geometry ones (angle/start/sizeVar/quads)
     // reshape on rebuild; material ones (tint/alphaTest/flat) update the cached
     // material live. Defaults read from the species so a switch re-seeds them.
-    leafTint: species.foliage?.tint ?? 0xffffff,
+    leafColorize: 0xffffff,   // colorize target (interpolated toward, not multiplied)
+    leafTintAmount: 0,        // 0 = raw texture, 1 = fully recolored
     leafAngle: species.foliage?.downAngle ?? 52,
     leafStart: species.foliage?.startFrac ?? 0.1,
     leafSizeVar: species.foliage?.sizeVar ?? 0.3,
@@ -108,7 +109,7 @@ export function applySpeciesControls(species, c) {
  *   stats: { species, seed, stems, leaves, triangles } — updated via returned api
  */
 export function buildGUI(opts) {
-  const { speciesMap, state, sunState, envState, optState, windState, camState, onChange, onRandomize, onExport, onExportPNG, onSun, onScaleRef, onFog, onWind, onForest, onSpom, onOpt, onCamera, onLoadRebuild, onMaterialTweak } = opts;
+  const { speciesMap, state, sunState, envState, optState, windState, camState, onChange, onRandomize, onExport, onExportPNG, onSun, onScaleRef, onFog, onWind, onForest, onSpom, onGtao, onAA, onOpt, onCamera, onLoadRebuild, onMaterialTweak } = opts;
   const gui = new GUI({ title: '' });
 
   // Branding header (Codex-generated logo + wordmark; falls back to plain text
@@ -127,6 +128,25 @@ export function buildGUI(opts) {
 
   const proxy = { species: speciesMap[state.speciesKey].name, ...state.controls };
 
+  // Mobile Target availability + LOD-slider semantics live here so they can react
+  // to species changes. Desert (rosette) species have no branch cards, so the
+  // card-based mobile mode doesn't apply — the toggle is hidden for them. When
+  // mobile is EFFECTIVELY active (toggle on AND a card species) the LOD1/LOD2
+  // dials relabel to card terms and the budget-% dials (no-ops on cards) hide.
+  let cMobile, cMeshQ, cLod1Pct, cLod2Pct, cLod1Den, cLod2Den, cLod1Prn, cLod2Prn;
+  function applyMobileUI() {
+    if (!cMobile) return;
+    const isRosette = speciesMap[state.speciesKey]?.foliageType === 'rosette';
+    cMobile.show(!isRosette);
+    const m = !!optState?.mobileTarget && !isRosette;
+    cLod1Pct.show(!m); cLod2Pct.show(!m);
+    cMeshQ.name(m ? 'Twig / skeleton quality' : 'LOD0 mesh quality');
+    cLod1Den.name(m ? 'LOD1 card density' : 'LOD1 foliage density');
+    cLod2Den.name(m ? 'LOD2 card density' : 'LOD2 foliage density');
+    cLod1Prn.name(m ? 'LOD1 twig prune' : 'LOD1 branch prune');
+    cLod2Prn.name(m ? 'LOD2 twig prune' : 'LOD2 branch prune');
+  }
+
   gui.add(proxy, 'species', speciesNames).name('Species').onChange((key) => {
     state.speciesKey = key;
     onChange(true); // species changed → main.js resets state.controls (sync)
@@ -135,6 +155,7 @@ export function buildGUI(opts) {
     buildParamControls(); // rebuild sliders for this species' branching type
     buildAdvancedControls();
     buildLeafBarkControls();
+    applyMobileUI(); // hide the mobile toggle on desert species
   });
 
   gui.add(proxy, 'seed', 1, 9999, 1).name('Seed').onChange((v) => { state.controls.seed = v; onChange(); }).listen();
@@ -203,7 +224,10 @@ export function buildGUI(opts) {
     // leaf editor for them; bark tint/flat still apply to their flesh material.
     leaves.domElement.style.display = isRosette ? 'none' : '';
     if (!isRosette) {
-      leaves.addColor(proxy, 'leafTint').name('Tint').onChange(mtweak('leafTint'));
+      // Colorize: pick a target color, then dial how far to interpolate the leaf
+      // texture toward it (luminance-preserving — keeps vein/shading detail).
+      leaves.addColor(proxy, 'leafColorize').name('Tint').onChange(mtweak('leafColorize'));
+      leaves.add(proxy, 'leafTintAmount', 0, 1, 0.01).name('Tint amount').onChange(mtweak('leafTintAmount'));
       leaves.add(proxy, 'leafAngle', 0, 100, 1).name('Angle').onChange(geom('leafAngle'));
       leaves.add(proxy, 'leafStart', 0, 1, 0.01).name('Start').onChange(geom('leafStart'));
       leaves.add(proxy, 'leafSizeVar', 0, 1, 0.01).name('Size variance').onChange(geom('leafSizeVar'));
@@ -225,19 +249,27 @@ export function buildGUI(opts) {
       'LOD2 — baked cards': 2,
       'LOD3 — billboard': 3,
     }).name('Preview level').onChange(() => onOpt('preview'));
-    opt.add(optState, 'meshQuality', 0.3, 1, 0.05).name('LOD0 mesh quality').onChange(() => onOpt('rebuild'));
+    // Mobile target: keep the full mesh ladder built but hidden; render the baked
+    // card LOD2 as the near LOD plus two cheaper card levels. In this mode the
+    // LOD1/LOD2 dials retarget onto those two card levels, so their labels switch
+    // to card semantics and the mesh-only dials (budget %, mesh quality — no-ops
+    // on a card LOD) hide. applyMobileOptLabels() below does the swap.
+    cMobile = opt.add(optState, 'mobileTarget').name('Mobile performance target')
+      .onChange(() => { applyMobileUI(); onOpt('rebuild'); });
+    cMeshQ = opt.add(optState, 'meshQuality', 0.3, 1, 0.05).name('LOD0 mesh quality').onChange(() => onOpt('rebuild'));
     opt.add(optState, 'lod1Dist', 5, 80, 1).name('LOD1 at (m)').onChange(() => onOpt('dist'));
     opt.add(optState, 'lod2Dist', 15, 150, 1).name('LOD2 at (m)').onChange(() => onOpt('dist'));
     opt.add(optState, 'billboardDist', 30, 300, 1).name('Billboard at (m)').onChange(() => onOpt('dist'));
     // Triangle BUDGETS as % of LOD0 — the builder solves mesh/leaf params to hit
     // them (HUD shows the achieved percentages). Look dials below don't change
     // the budget, only where it's spent.
-    opt.add(optState, 'lod1Pct', 15, 85, 5).name('LOD1 budget (%)').onChange(() => onOpt('rebuild'));
-    opt.add(optState, 'lod1Density', 0.3, 1, 0.05).name('LOD1 foliage density').onChange(() => onOpt('rebuild'));
-    opt.add(optState, 'lod1Prune', 0, 0.85, 0.05).name('LOD1 branch prune').onChange(() => onOpt('rebuild'));
-    opt.add(optState, 'lod2Pct', 4, 40, 1).name('LOD2 budget (%)').onChange(() => onOpt('rebuild'));
-    opt.add(optState, 'lod2Density', 0.2, 1, 0.05).name('LOD2 foliage density').onChange(() => onOpt('rebuild'));
-    opt.add(optState, 'lod2Prune', 0, 0.85, 0.05).name('LOD2 branch prune').onChange(() => onOpt('rebuild'));
+    cLod1Pct = opt.add(optState, 'lod1Pct', 15, 85, 5).name('LOD1 budget (%)').onChange(() => onOpt('rebuild'));
+    cLod1Den = opt.add(optState, 'lod1Density', 0.3, 1, 0.05).name('LOD1 foliage density').onChange(() => onOpt('rebuild'));
+    cLod1Prn = opt.add(optState, 'lod1Prune', 0, 0.85, 0.05).name('LOD1 branch prune').onChange(() => onOpt('rebuild'));
+    cLod2Pct = opt.add(optState, 'lod2Pct', 4, 40, 1).name('LOD2 budget (%)').onChange(() => onOpt('rebuild'));
+    cLod2Den = opt.add(optState, 'lod2Density', 0.2, 1, 0.05).name('LOD2 foliage density').onChange(() => onOpt('rebuild'));
+    cLod2Prn = opt.add(optState, 'lod2Prune', 0, 0.85, 0.05).name('LOD2 branch prune').onChange(() => onOpt('rebuild'));
+    applyMobileUI(); // reflect the initial species + mobile state (hides toggle on rosettes)
     // Bake quality: card res/variants invalidate the card cache → rebake+rebuild.
     opt.add(optState, 'cardRes', { '256²': 256, '512²': 512, '1024²': 1024 }).name('Card bake res').onChange(() => onOpt('rebuild'));
     opt.add(optState, 'cardVariants', { 2: 2, 3: 3, 4: 4 }).name('Card variants').onChange(() => onOpt('rebuild'));
@@ -256,6 +288,8 @@ export function buildGUI(opts) {
       env.add(envState, 'showScaleRef').name('Scale ref (1.8m)').onChange((v) => onScaleRef(v));
       if (onFog) env.add(envState, 'fog').name('Distance fog').onChange(() => onFog());
       if (onSpom) env.add(envState, 'spom').name('Parallax terrain (SPOM)').onChange(() => onSpom());
+      if (onGtao) env.add(envState, 'gtao').name('Ambient occlusion (GTAO)').onChange(() => onGtao());
+      if (onAA) env.add(envState, 'aa').name('Antialiasing (MSAA)').onChange(() => onAA());
       if (onForest) env.add(envState, 'forestCount', 0, 96, 8).name('Forest trees').onChange(() => onForest());
     }
   }
@@ -284,6 +318,7 @@ export function buildGUI(opts) {
     buildParamControls();
     buildAdvancedControls();
     buildLeafBarkControls();
+    applyMobileUI(); // hide the mobile toggle on desert species
     gui.controllersRecursive().forEach((c) => c.updateDisplay());
     onLoadRebuild?.(); // main.js: biome + build for the loaded state (no controls reset)
   }

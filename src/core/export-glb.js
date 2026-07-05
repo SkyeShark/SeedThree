@@ -114,6 +114,10 @@ function buildExportTree(lodRoot) {
 
   for (const level of lodRoot.levels) {
     const src = level.object;
+    // Mobile Performance Target adds app-only extra card LODs (LOD3/LOD4) purely
+    // for in-app rendering; the export stays the standard LOD0/LOD1/LOD2/billboard
+    // set (the hidden mesh LODs are the real geometry and DO export).
+    if (src.userData?.appOnly) continue;
     const lg = new Group();
     lg.name = src.name;
     lg.visible = true;
