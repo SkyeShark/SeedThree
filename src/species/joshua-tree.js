@@ -6,6 +6,7 @@ export const joshuaTree = {
   name: 'Joshua Tree',
   latin: 'Yucca brevifolia',
   bark: 'joshua_tree_albedo.png',
+  thatchBark: 'joshua_thatch_albedo.png', // dead-leaf sleeve — clads the tube on reduced/mobile LODs where the skirt geometry is dropped (skirtToBark)
   leaf: 'yucca_rosette_albedo.png', // circle-of-blades rosette sprite (user-supplied)
   biome: 'desert',
   groundTexture: 'desert_ground_albedo.png',  // muted Mojave desert-pavement (Codex $imagegen → derived PBR)

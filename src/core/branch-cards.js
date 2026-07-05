@@ -55,6 +55,46 @@ function rebaseStem(stem) {
   };
 }
 
+// parentId → [children] index over a flat stem list (see weber-penn topology).
+function childrenMap(stems) {
+  const m = new Map();
+  for (const s of stems) {
+    if (s.parentId == null || s.parentId < 0) continue;
+    let a = m.get(s.parentId); if (!a) m.set(s.parentId, a = []);
+    a.push(s);
+  }
+  return m;
+}
+
+// A root stem + every descendant (branch + its twigs), gathered depth-first.
+function subtreeOf(root, byParent) {
+  const out = [root];
+  const stack = [root.id];
+  while (stack.length) {
+    const kids = byParent.get(stack.pop());
+    if (!kids) continue;
+    for (const k of kids) { out.push(k); stack.push(k.id); }
+  }
+  return out;
+}
+
+// Rebase a WHOLE subtree by ONE shared frame (the root's base/chord), so the
+// limb keeps its internal shape but sits base-at-origin, chord-up — the frame
+// the placed card is scaled/oriented in. On a curled root whose chord collapses,
+// fall back to the base-segment tangent so the whole limb isn't flung sideways.
+function rebaseSubtree(subtree, root) {
+  const base = root.points[0];
+  const chord = chordVec(root, new Vector3());
+  if (chord.lengthSq() < 1e-6) chord.copy(root.points[1]).sub(root.points[0]);
+  chord.normalize();
+  const q = new Quaternion().setFromUnitVectors(chord, new Vector3(0, 1, 0));
+  return subtree.map((s) => ({
+    ...s,
+    points: s.points.map((p) => p.clone().sub(base).applyQuaternion(q)),
+    orients: s.orients.map((o) => q.clone().multiply(o)),
+  }));
+}
+
 // Single quad spanning the bake framing, in the SAME stem-local space (origin =
 // stem base) so instance transforms are just (base position, chord rotation, scale).
 function cardQuadGeometry(center, halfW, halfH) {
@@ -76,7 +116,7 @@ function cardQuadGeometry(center, halfW, halfH) {
 
 // Same material family + dome-normal blend as LOD0 leaves — matched diffuse
 // response across the LOD switch is what hides the pop (proxy-normal transfer).
-function makeCardMaterial(t, centerUniform) {
+function makeCardMaterial(t, centerUniform, opts = {}) {
   const mat = new MeshSSSNodeMaterial({
     map: t.albedo, normalMap: t.normal, roughnessMap: t.rough,
     alphaTest: 0.35, side: DoubleSide, roughness: 1.0, metalness: 0.0,
@@ -90,7 +130,9 @@ function makeCardMaterial(t, centerUniform) {
   const detail = texture(t.normal).xyz.mul(2).sub(1);
   const nWorld = base.add(detail.mul(0.45)).normalize();
   mat.normalNode = cameraViewMatrix.mul(vec4(nWorld, 0)).xyz.normalize();
-  mat.positionNode = foliageWindPosition(); // cards ride the same canopy sway
+  // Same canopy sway as the leaves; noFlutter for CROSSED (limb) card sets — the
+  // random-phase flutter tears a crossed pair apart at the seam (see wind.js).
+  mat.positionNode = foliageWindPosition(!opts.noFlutter);
   const transmit = uniform(new Color().setRGB(...TRANSMIT));
   mat.thicknessColorNode = texture(t.trans).r.mul(attribute('aThickness', 'float')).mul(transmit);
   mat.thicknessDistortionNode = uniform(0.3);
@@ -103,11 +145,14 @@ function makeCardMaterial(t, centerUniform) {
 }
 
 /**
- * Bake 2-4 exemplar terminal-branch cards for a species.
+ * Bake 2-4 exemplar branch cards for a species, rooted at a chosen branch level.
  * Caller must pause its animation loop (renderer is re-targeted).
  *
  * @param {object} species  shaped species preset (params + foliage reflect GUI)
  * @param {object} assets   cached species assets (barkMat, leafMat, ...)
+ * @param {object} opts     { size, variants, cardLevel } — cardLevel defaults to
+ *                          the deepest level (per-twig cards); lower levels bake a
+ *                          whole limb (branch + twigs + leaves) into one card.
  * @returns {Promise<{variants: Array, centerUniform} | null>}
  */
 export async function bakeBranchCards(renderer, species, assets, opts = {}) {
@@ -119,12 +164,20 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
   const rng = new Rng(`${species.name}:cards`);
   const { stems } = generateSkeleton(species.params, rng);
   const v = new Vector3();
-  const terminals = stems.filter((s) => s.level === s.maxLevel && s.points.length >= 2 && chordVec(s, v).lengthSq() > 1e-4);
-  if (!terminals.length) return null;
+  // Which branch level roots each card. Default = the deepest level (terminal
+  // twigs → one card per twig, the classic hybrid LOD). A LOWER cardLevel bakes a
+  // whole LIMB (branch + all its twigs + leaves) into ONE card, so reduced/mobile
+  // LODs can DELETE that limb's geometry and show a single billboard of it — the
+  // AAA "curve toward impostor" (each rung down bakes a bigger slice of the tree).
+  const maxLevel = stems[0]?.maxLevel ?? 0;
+  const cardLevel = opts.cardLevel ?? maxLevel;
+  const byParent = childrenMap(stems);
+  const roots = stems.filter((s) => s.level === cardLevel && s.points.length >= 2 && chordVec(s, v).lengthSq() > 1e-4);
+  if (!roots.length) return null;
 
   // Exemplars from spread ARC-length percentiles — variety without atlas bloat.
   // (Arc length, not chord — the chord collapses on curved twigs; see stemArcLen.)
-  const sorted = [...terminals].sort((a, b) => stemArcLen(a) - stemArcLen(b));
+  const sorted = [...roots].sort((a, b) => stemArcLen(a) - stemArcLen(b));
   const picks = [0.25, 0.45, 0.65, 0.85].slice(0, Math.min(variantCount, 4))
     .map((f) => sorted[Math.floor(f * (sorted.length - 1))]);
 
@@ -132,17 +185,42 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
   const thicknessRng = new Rng(`${species.name}:cards:thickness`);
   const variants = [];
   for (const [vi, stem] of picks.entries()) {
-    const local = rebaseStem(stem);
+    // The exemplar is the root's WHOLE subtree, rebased by the root frame. At the
+    // default (terminal) level the subtree is just the twig itself, so this stays
+    // identical to the old per-twig bake.
+    const sub = rebaseSubtree(subtreeOf(stem, byParent), stem);
+    const subTerminals = sub.filter((s) => s.level === maxLevel);
     const group = new Group();
-    const twigGeo = buildBranchGeometry([local], { tileWorldSize: species.tileWorldSize ?? 1.5 });
-    group.add(new Mesh(twigGeo, assets.barkMat));
+    // foliageOnly: bake LEAVES only, no twig tube in the card. For hybrid levels
+    // that KEEP the real twig skeleton (keepTwigs), a card with the tube baked in
+    // duplicates every twig — a cylinder AND a picture of that cylinder side by
+    // side (glaring at the mobile near view). Collapse levels, whose real tubes
+    // are deleted, bake the full twig+leaves content.
+    let twigGeo = null;
+    if (!opts.foliageOnly) {
+      twigGeo = buildBranchGeometry(sub, { tileWorldSize: species.tileWorldSize ?? 1.5 });
+      group.add(new Mesh(twigGeo, assets.barkMat));
+    }
     const frng = new Rng(`${species.name}:cards:${vi}`);
     // trunkClearRadius culls leaves near the WORLD axis (the real trunk). The exemplar
     // cluster is rebased to the ORIGIN, so leaving it on would cull the ENTIRE cluster
     // (every leaf sits within the radius of x=z=0) → empty cards (the red maple forest
     // "no leaves" bug). It only makes sense against the actual trunk, so force it off here.
-    const leaves = buildFoliage([local], { ...(species.foliage || {}), mode: 'leaves', trunkClearRadius: 0 }, frng, assets.leafMat, null);
+    // FOLIAGE-ONLY cards bake their leaves on a STRAIGHTENED twig. The exemplar's
+    // random curve put the leaf mass off the chord axis in a direction unrelated
+    // to whatever real twig the card lands on — leaves floated in the air beside
+    // their branch. (Full-content cards hid this: the baked tube moved WITH its
+    // leaves.) Straight along the chord, the leaves hug the real twig underneath
+    // — which the mobile near LOD decimates to its chord anyway.
+    const leafStems = subTerminals.length ? subTerminals : sub;
+    const bakeStems = !opts.foliageOnly ? leafStems : leafStems.map((s) => {
+      let acc = 0;
+      const pts = s.points.map((p, j) => { if (j > 0) acc += p.distanceTo(s.points[j - 1]); return new Vector3(0, acc, 0); });
+      return { ...s, points: pts, orients: s.orients.map(() => new Quaternion()) };
+    });
+    const leaves = buildFoliage(bakeStems, { ...(species.foliage || {}), mode: 'leaves', trunkClearRadius: 0 }, frng, assets.leafMat, null);
     if (leaves) group.add(leaves);
+    if (!group.children.length) continue; // foliage-only exemplar with no leaves → nothing to bake
 
     if (leaves) leaves.computeBoundingBox?.();
     const box = new Box3().setFromObject(group);
@@ -158,7 +236,7 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
     const baked = (await bakeGroupToTextures(renderer, group, [{ name: 'card', camera: cam }], { size, dilate: 10 })).card;
 
     // Bake-only geometry is disposable; the card quad is cached across rebuilds.
-    twigGeo.dispose();
+    twigGeo?.dispose();
     if (leaves) leaves.geometry.dispose();
 
     const geometry = cardQuadGeometry(center, halfW, halfH);
@@ -172,12 +250,12 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
     geometry.setAttribute('aAnchorPos', new InstancedBufferAttribute(new Float32Array(MAX_CARD_INSTANCES * 3), 3));
     variants.push({
       geometry,
-      material: makeCardMaterial(baked, centerUniform),
+      material: makeCardMaterial(baked, centerUniform, { noFlutter: opts.noFlutter }),
       textures: baked,
       chordLen: stemArcLen(stem), // ARC length (stable), not the collapsing chord
     });
   }
-  return { variants, centerUniform };
+  return variants.length ? { variants, centerUniform, foliageOnly: !!opts.foliageOnly } : null;
 }
 
 /**
@@ -190,6 +268,12 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
 export function buildCardFoliage(terminalStems, cards, rng, opts = {}) {
   const grow = opts.growScale ?? 1.2;
   const keep = opts.keepFraction ?? 1;
+  // Whole-limb cards (mobile far rungs) place a CROSSED PAIR per limb, like the
+  // final billboard. One flat quad per TWIG can vanish edge-on because hundreds of
+  // neighbours at random rolls cover for it — but a lone LIMB card IS the canopy
+  // where it stands, so edge-on it left a bare pole with streaks. The 90° twin
+  // keeps the limb readable from every azimuth for +2 tris per limb.
+  const copies = opts.crossed ? 2 : 1;
   const { variants, centerUniform } = cards;
   if (!terminalStems.length || !variants.length) return null;
 
@@ -230,16 +314,24 @@ export function buildCardFoliage(terminalStems, cards, rng, opts = {}) {
   for (const [vi, list] of buckets.entries()) {
     if (!list.length) continue;
     const variant = variants[vi];
-    const mesh = new InstancedMesh(variant.geometry, variant.material, list.length);
+    const mesh = new InstancedMesh(variant.geometry, variant.material, list.length * copies);
     mesh.name = `cards${vi}`;
     const windVecAttr = variant.geometry.attributes.aWindVec;
     const anchorAttr = variant.geometry.attributes.aAnchorPos;
-    const weights = new Float32Array(list.length); // CPU copy for the forest rebinner
+    const weights = new Float32Array(list.length * copies); // CPU copy for the forest rebinner
+    const qChord = new Quaternion();
     const qInv = new Quaternion();
     const wv = new Vector3();
     let k = 0;
     for (const stem of list) {
-      const weight = stem.winds?.[0] ?? 0.6; // twig sway weight at the card's anchor
+      // Sway weight: a per-twig card anchors near the tips, so its BASE weight is
+      // already tip-like. A CROSSED limb card replaces the limb's whole canopy —
+      // swaying it by the limb root's stiff base weight froze LOD2 while the
+      // nearer LODs waved (the wind "mostly stopped" bug). Use the root's TIP
+      // weight so the card moves like the foliage it stands in for.
+      const weight = (copies > 1)
+        ? (stem.winds?.[stem.winds.length - 1] ?? stem.winds?.[0] ?? 0.6)
+        : (stem.winds?.[0] ?? 0.6);
       pos.copy(stem.points[0]);
       chordVec(stem, chord);
       const chordLen = chord.length();
@@ -248,20 +340,29 @@ export function buildCardFoliage(terminalStems, cards, rng, opts = {}) {
       // Orient along the chord when it's meaningful; on a curled twig whose chord
       // nearly vanishes, fall back to the base-segment tangent so the card isn't
       // wildly mis-aimed (and, crucially, isn't scaled by a near-zero chord).
-      if (chordLen > 0.15 * refLen) q.setFromUnitVectors(Y, chord.divideScalar(chordLen));
-      else q.setFromUnitVectors(Y, chord.copy(stem.points[1]).sub(stem.points[0]).normalize());
-      qRoll.setFromAxisAngle(Y, rng.range(0, Math.PI * 2)); // roll about the branch axis
-      q.multiply(qRoll);
-      const s = (refLen / variant.chordLen) * grow; // arc-length ratio → ~1 (× grow), never explodes
+      if (chordLen > 0.15 * refLen) qChord.setFromUnitVectors(Y, chord.divideScalar(chordLen));
+      else qChord.setFromUnitVectors(Y, chord.copy(stem.points[1]).sub(stem.points[0]).normalize());
+      const roll = rng.range(0, Math.PI * 2); // roll about the branch axis
+      // Arc-length ratio → ~1 (× grow). FOLIAGE-ONLY cards clamp the ratio hard:
+      // the card scales its LEAVES with it, and at the mobile NEAR view a long
+      // twig on a short exemplar reads as giant leaves (beech's wide twig-length
+      // spread). Leaf size is sacred; a slightly short/long leaf run along the
+      // twig is invisible next to wrong-sized leaves.
+      let s = (refLen / variant.chordLen) * grow;
+      if (cards.foliageOnly) s = Math.min(1.15, Math.max(0.75, s));
       scl.set(s, s, s);
-      // wind heading×weight in card-local space + anchor for sway phase (wind.js)
-      qInv.copy(q).invert();
-      wv.copy(WIND_DIR).applyQuaternion(qInv).multiplyScalar(weight / s);
-      windVecAttr.setXYZ(k, wv.x, wv.y, wv.z);
-      anchorAttr.setXYZ(k, pos.x, pos.y, pos.z);
-      weights[k] = weight;
-      m.compose(pos, q, scl);
-      mesh.setMatrixAt(k++, m);
+      for (let ci = 0; ci < copies; ci++) { // crossed pair: twin at 90°
+        qRoll.setFromAxisAngle(Y, roll + ci * Math.PI / 2);
+        q.copy(qChord).multiply(qRoll);
+        // wind heading×weight in card-local space + anchor for sway phase (wind.js)
+        qInv.copy(q).invert();
+        wv.copy(WIND_DIR).applyQuaternion(qInv).multiplyScalar(weight / s);
+        windVecAttr.setXYZ(k, wv.x, wv.y, wv.z);
+        anchorAttr.setXYZ(k, pos.x, pos.y, pos.z);
+        weights[k] = weight;
+        m.compose(pos, q, scl);
+        mesh.setMatrixAt(k++, m);
+      }
     }
     mesh.count = k;
     mesh.userData.windWeights = weights;
@@ -315,10 +416,15 @@ export function forestCardMaterial(srcMat) {
 }
 
 export function disposeBranchCards(cards) {
-  for (const variant of cards.variants) {
-    for (const tex of Object.values(variant.textures)) tex.dispose();
-    forestMats.get(variant.material)?.dispose(); // forest twin shares the maps
-    variant.material.dispose();
-    variant.geometry.dispose();
+  // A facade may hold several per-level sets in `byLevel` (its `variants` alias the
+  // deepest set, so iterate byLevel to avoid missing — or double-freeing — a set).
+  const sets = cards.byLevel ? [...cards.byLevel.values()] : [cards];
+  for (const set of sets) {
+    for (const variant of set.variants) {
+      for (const tex of Object.values(variant.textures)) tex.dispose();
+      forestMats.get(variant.material)?.dispose(); // forest twin shares the maps
+      variant.material.dispose();
+      variant.geometry.dispose();
+    }
   }
 }

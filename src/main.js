@@ -1,6 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { buildTree, makeBarkMaterial, makeCactusBarkMaterial, forestBarkMaterial } from './core/tree.js';
+import { buildTree, makeBarkMaterial, makeCactusBarkMaterial, makeThatchBarkMaterial, forestBarkMaterial } from './core/tree.js';
 import { makeFoliageMaterial } from './core/leaf-cards.js';
 import { makeYuccaMaterial } from './core/yucca-leaves.js';
 import { makeSpineMaterial } from './core/cactus-spines.js';
@@ -131,6 +131,19 @@ async function loadSpeciesAssets(species, sunLight = null) {
     assets.spineMat = makeSpineMaterial(assets, sunLight);
   } else {
     assets.barkMat = makeBarkMaterial(assets);
+  }
+  // Thatch bark (dead-leaf sleeve) — clads the tube on reduced/mobile LODs where the
+  // skirt geometry is dropped (skirtToBark). Its own bark material, cached per species.
+  if (species.thatchBark) {
+    const tb = species.thatchBark.replace('_albedo.png', '');
+    const [thA, thN, thR] = await Promise.all([
+      loadTex(barkUrl(species.thatchBark), true),
+      opt(barkUrl(`${tb}_normal.png`), false),
+      opt(barkUrl(`${tb}_roughness.png`), false),
+    ]);
+    assets.thatchTexture = thA; assets.thatchNormal = thN; assets.thatchRoughness = thR;
+    // Layered: thatch clads the branches up top, real BARK on the bare lower trunk.
+    assets.thatchBarkMat = makeThatchBarkMaterial(assets);
   }
   if (!species.cactus && species.foliageType === 'rosette') {
     // Rosette species: one spike-leaf material at every LOD (no card system).
@@ -541,11 +554,11 @@ async function main() {
   // distance sliders retarget by name: LOD1→LOD3, LOD2→LOD4, Billboard→BB. No-op
   // (returns) in desktop mode, so the normal LOD distance logic is untouched.
   const HIDE_DIST = 1e7;
-  // A tree is a "mobile card tree" only if it was actually built with the card
-  // ladder (hidden mesh LODs). Rosette/desert species (buildDichotomousTree)
-  // ignore mobileTarget — they have no branch cards — so their normal cone ladder
-  // must be left alone even while the toggle is on. Every mobile LOD path gates on
-  // this so desert plants gracefully fall back to desktop LOD behaviour.
+  // A tree is a "mobile tree" only if it was actually BUILT with a mobile ladder
+  // (hidden mesh LODs). Both paths build one under mobileTarget — the card ladder
+  // (temperate) and the rosette/cactus ladder (skirtToBark + cone LOD3/LOD4) — and
+  // both park LOD0/LOD1 as hiddenInApp. Gating on that flag keeps applyLodMobile
+  // off trees built BEFORE the toggle flipped (they rebuild into the ladder next).
   const isMobileTree = (tree) => !!tree?.levels?.some((l) => l.object.userData.hiddenInApp);
   function applyLodMobile(tree) {
     if (!tree || !optState.mobileTarget || !isMobileTree(tree)) return;
@@ -566,27 +579,51 @@ async function main() {
   async function ensureBranchCards(species, shaped) {
     if (species.foliageType === 'rosette') return null; // real geometry at every LOD
     if (!shaped.foliage || (shaped.foliage.leavesPerBranch ?? 1) <= 0) return null;
-    const key = `${species.name}|${shaped.foliage.size}|${shaped.foliage.leavesPerBranch}|${shaped.params.levels}|${optState.cardRes}|${optState.cardVariants}`;
+    // Mobile bakes EXTRA whole-limb card sets (its LOD3/LOD4 collapse limbs into
+    // cards), so the toggle keys its own cache entry.
+    const key = `${species.name}|${shaped.foliage.size}|${shaped.foliage.leavesPerBranch}|${shaped.params.levels}|${optState.cardRes}|${optState.cardVariants}|${optState.mobileTarget ? 'm' : 'd'}`;
     let cards = cardCache.get(key);
     if (cards) return cards;
     const assets = assetCache.get(species.name);
+    // Card sets to bake, keyed `level:content` (mirrors the rungs in tree.js
+    // lodLevels). Hybrid keepTwigs levels need FOLIAGE-ONLY per-twig cards (the
+    // real tubes render — a tube in the card doubles every twig); collapse levels
+    // need the full twig+leaves content. Desktop's hybrid LOD2 uses only the fol
+    // set; mobile adds the two collapse sets (per-twig full + one-level-up limbs).
+    const maxLevel = (shaped.params.levels ?? 3) - 1;
+    const jobs = [{ level: maxLevel, foliageOnly: true }];
+    if (optState.mobileTarget) {
+      jobs.push({ level: maxLevel, foliageOnly: false });
+      jobs.push({ level: Math.max(1, maxLevel - 1), foliageOnly: false });
+    }
     baking = true; // the bake re-targets the renderer — pause the main loop
+    const byLevel = new Map();
     try {
-      cards = await bakeBranchCards(renderer, shaped, assets, {
-        size: optState.cardRes, variants: optState.cardVariants,
-      });
+      for (const job of jobs) {
+        const jobKey = `${job.level}:${job.foliageOnly ? 'fol' : 'full'}`;
+        if (byLevel.has(jobKey)) continue; // clamped levels can collide on tiny trees
+        const set = await bakeBranchCards(renderer, shaped, assets, {
+          size: optState.cardRes, variants: optState.cardVariants,
+          cardLevel: job.level, foliageOnly: job.foliageOnly,
+          // Limb-level sets place as crossed pairs — no flutter (it tears the pair).
+          noFlutter: job.level < maxLevel,
+        });
+        if (set) byLevel.set(jobKey, set);
+      }
     } catch (e) {
       console.error('[SeedThree] branch card bake failed:', e);
-      cards = null;
     } finally {
       baking = false;
     }
-    if (cards) {
-      cardCache.set(key, cards);
-      if (cardCache.size > 6) { // keep VRAM bounded when params churn
-        const [oldKey, old] = cardCache.entries().next().value;
-        if (oldKey !== key) { cardCache.delete(oldKey); disposeBranchCards(old); }
-      }
+    const near = byLevel.get(`${maxLevel}:fol`) ?? byLevel.get(`${maxLevel}:full`);
+    if (!near) return null; // no usable cards → fall back to cluster foliage
+    // Facade: byLevel drives the LOD builder; variants/centerUniform alias the
+    // near per-twig set for the forest rebinner + billboard bake (back-compat).
+    cards = { byLevel, variants: near.variants, centerUniform: near.centerUniform };
+    cardCache.set(key, cards);
+    if (cardCache.size > 6) { // keep VRAM bounded when params churn
+      const [oldKey, old] = cardCache.entries().next().value;
+      if (oldKey !== key) { cardCache.delete(oldKey); disposeBranchCards(old); }
     }
     return cards;
   }
@@ -766,7 +803,11 @@ async function main() {
       // gargantuan leaves. The billboard must be WYSIWYG with the hero, and the
       // off-thread worker makes the extra geometry cost a non-issue.
       const geomLevels = tree.levels.filter((l) => !l.object.userData.isBillboard);
-      const source = geomLevels[0].object;
+      // Pin the bake source to the TRUE full-detail mesh BY NAME. applyLodMobile
+      // sorts levels by distance and parks LOD0 at 1e7, so in mobile mode index 0
+      // is the near CARD rung — baking cards-of-cards gave the billboard giant
+      // flat leaves. The desktop-max mesh always exists (hiddenInApp, still built).
+      const source = (geomLevels.find((l) => l.object.userData.lodName === 'LOD0') ?? geomLevels[0]).object;
       const opts = { name: SPECIES[state.speciesKey].name, lodName: `LOD${geomLevels.length}` };
       if (bakeWorker) {
         // OFF-THREAD: serialize the source geometry + textures, bake full-res on the
@@ -1327,8 +1368,14 @@ async function main() {
         camera.updateMatrixWorld();
         currentTree.update(camera);
       } else {
-        const idx = Math.min(optState.preview, currentTree.levels.length - 1);
-        currentTree.levels.forEach((l, i) => { l.object.visible = i === idx; });
+        // Force the Nth VISIBLE level, sorted by distance and skipping the hidden mesh
+        // LODs that mobile parks off-screen — so the dropdown's LOD0/1/2/BB map to the
+        // SAME levels the HUD renumbers, never a parked high-poly LOD or the wrong
+        // billboard (the mobile preview-selector bug).
+        const vis = currentTree.levels.filter((l) => !l.object.userData.hiddenInApp).sort((a, b) => a.distance - b.distance);
+        const idx = Math.min(optState.preview, vis.length - 1);
+        currentTree.levels.forEach((l) => { l.object.visible = false; });
+        if (vis[idx]) vis[idx].object.visible = true;
       }
     }
     renderFrame(); // GTAO post-pass or direct; billboard bake is OFF-THREAD (worker) → viewer paints every frame

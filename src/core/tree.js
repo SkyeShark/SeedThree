@@ -36,11 +36,12 @@ function buildDichotomousTree(species, seed, assets, lodOpts, reuse = null) {
   //  • lod1/lod2Dist → switch distances. (budget%/prune don't apply — no branch cards.)
   const q = Math.max(0.35, lodOpts.meshQuality ?? 1);
   const d1 = lodOpts.lod1Density ?? 1, d2 = lodOpts.lod2Density ?? 1;
-  const cs = (base) => Math.max(3, Math.round(base * q)); // per-LOD cone detail
+  const cs = (base) => Math.max(3, Math.round(base * q)); // per-LOD cone (rosette) detail
+  const rs = (base) => Math.max(4, Math.round(base * q)); // per-LOD tube (branch/trunk) radial detail — the Mesh-detail slider
   const levels = [
-    { name: 'LOD0', distance: 0, radialSegs: species.params.radialSegs ?? 10, rosetteDensity: 1, coneRadialSegs: cs(12) },
-    { name: 'LOD1', distance: lodOpts.lod1Dist ?? 35, radialSegs: 6, rosetteDensity: 0.6 * d1, coneRadialSegs: cs(8) },
-    { name: 'LOD2', distance: lodOpts.lod2Dist ?? 80, radialSegs: 5, rosetteDensity: 0.35 * d2, coneRadialSegs: cs(4) },
+    { name: 'LOD0', distance: 0, radialSegs: rs(species.params.radialSegs ?? 10), rosetteDensity: 1, coneRadialSegs: cs(12) },
+    { name: 'LOD1', distance: lodOpts.lod1Dist ?? 35, radialSegs: rs(6), rosetteDensity: 0.6 * d1, coneRadialSegs: cs(8) },
+    { name: 'LOD2', distance: lodOpts.lod2Dist ?? 80, radialSegs: rs(5), rosetteDensity: 0.35 * d2, coneRadialSegs: cs(4) },
   ];
   if (species.cactus) {
     // A fluted column needs ≥2 radial samples PER RIB or the ribs alias into lumps
@@ -68,9 +69,18 @@ function buildDichotomousTree(species, seed, assets, lodOpts, reuse = null) {
       levels[2].ribDepth = species.params.ribDepth * 0.85;
       levels[2].spineDensity = 0.5 * d2; // keep ribs + spines on the near mobile column
     } else {
-      levels[2].radialSegs = 6;
-      levels[2].coneRadialSegs = cs(7);   // medium cones (not the desktop-far coarsest)
-      levels[2].rosetteDensity = 0.7 * d2; // fuller skirt/rosettes than desktop LOD2
+      // ROSETTE MOBILE LADDER (parity with the temperate card ladder). The dead-leaf
+      // SKIRT — the bulk of the triangles — is BAKED into a thatch bark texture on the
+      // tube (skirtToBark → skirt geometry dropped, tube uses assets.thatchBarkMat).
+      // The green crown stays as cones, coarsened per level. Two extra cheap levels
+      // (LOD3/LOD4, appOnly) slot into the LOD1/LOD2 slider positions via applyLodMobile.
+      // Crown stays as cones but MUCH lighter than the hero: density < 1 → a single
+      // (not double) blade copy, and coarser cones per level. (rosetteDensity>=1 doubles
+      // the crown for hero alpha-gap fill — unneeded on mobile.) Skirt is gone (bark).
+      levels[2].skirtToBark = true; levels[2].thatchBark = true;
+      levels[2].radialSegs = 6; levels[2].coneRadialSegs = cs(6); levels[2].rosetteDensity = 0.9;
+      levels.push({ name: 'LOD3', distance: lodOpts.lod1Dist ?? 35, appOnly: true, skirtToBark: true, thatchBark: true, radialSegs: 5, coneRadialSegs: cs(4), rosetteDensity: 0.6 * d1 });
+      levels.push({ name: 'LOD4', distance: lodOpts.lod2Dist ?? 70, appOnly: true, skirtToBark: true, thatchBark: true, radialSegs: 5, coneRadialSegs: cs(3), rosetteDensity: 0.35 * d2 });
     }
   }
 
@@ -83,19 +93,27 @@ function buildDichotomousTree(species, seed, assets, lodOpts, reuse = null) {
   lod.name = `${species.name} (seed ${seed})`;
   const stats = [];
   for (const [i, lv] of levels.entries()) {
-    const level = reuse ? reuse.levels[i].object : new Group();
-    if (!reuse) { level.name = `${speciesSlug}_${lv.name}`; level.userData.lodName = lv.name; }
+    // Match the reused level by NAME, not array index: applyLodMobile SORTS reuse.levels
+    // by distance (and the billboard is interleaved into the array), so reuse.levels[i]
+    // no longer lines up with build-order levels[i]. Index-based reuse scrambled the
+    // hiddenInApp/appOnly flags + geometry across the wrong level Groups — the
+    // nondeterministic mobile-LOD breakage. Name-matching is order-independent.
+    const level = (reuse && reuse.levels.find((l) => l.object.userData?.lodName === lv.name)?.object) || new Group();
+    if (!level.userData.lodName) { level.name = `${speciesSlug}_${lv.name}`; level.userData.lodName = lv.name; }
     level.userData.hiddenInApp = !!lv.hiddenInApp; // mobile: parked by applyLodMobile (set even on reuse so toggling works)
+    level.userData.appOnly = !!lv.appOnly;         // LOD3/LOD4 mobile extras — not exported to GLB
 
     // Bark cylinders — rewrite the existing geometry's attributes in place on
     // reuse (keeps the Mesh + geometry identity → no recompile), else build fresh
-    // and remember the Mesh for next time.
+    // and remember the Mesh for next time. Thatch levels (reduced/mobile) use the
+    // dead-leaf bark so the skirt reads as cladding once its cone geometry is dropped.
+    const barkMat = (lv.thatchBark && assets.thatchBarkMat) ? assets.thatchBarkMat : (assets.barkMat ?? makeBarkMaterial(assets));
     let branches = level.userData.barkMesh;
     if (reuse && branches) {
       buildMergedMesh(stems, { ...species.params, radialSegs: lv.radialSegs, ribDepth: lv.ribDepth ?? species.params.ribDepth }, branches.geometry);
     } else {
       const geo = buildMergedMesh(stems, { ...species.params, radialSegs: lv.radialSegs, ribDepth: lv.ribDepth ?? species.params.ribDepth });
-      branches = new Mesh(geo, assets.barkMat ?? makeBarkMaterial(assets));
+      branches = new Mesh(geo, barkMat);
       branches.castShadow = true; branches.receiveShadow = true;
       level.add(branches);
       level.userData.barkMesh = branches;
@@ -119,7 +137,7 @@ function buildDichotomousTree(species, seed, assets, lodOpts, reuse = null) {
       // Pass the persistent foliage Group on reuse so buildYuccaFoliage rewrites
       // its per-cone InstancedMesh buffers in place (setMatrixAt, never swap).
       const reuseFol = level.userData.folGroup ?? null;
-      const fol = buildYuccaFoliage(terminalStems, { ...species.foliage, density: lv.rosetteDensity, coneRadialSegs: lv.coneRadialSegs }, frng, assets.rosetteMat, stems, reuseFol);
+      const fol = buildYuccaFoliage(terminalStems, { ...species.foliage, density: lv.rosetteDensity, coneRadialSegs: lv.coneRadialSegs, skirtToBark: lv.skirtToBark }, frng, assets.rosetteMat, stems, reuseFol);
       if (fol) {
         fol.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; leafInstances += o.count || 0; } });
         if (!reuseFol) { level.add(fol); level.userData.folGroup = fol; }
@@ -155,6 +173,28 @@ export function makeBarkMaterial(assets = {}) {
     metalness: 0.0,
   });
   mat.positionNode = barkWindPosition(); // sway ∝ baked aWind (trunk-stiff → tip-sway)
+  return mat;
+}
+
+// Thatch bark (reduced/mobile LODs where the skirt geometry is dropped) — a LAYERED
+// blend so we don't lose real bark where it belongs: the dead-leaf THATCH clads the
+// branches up top (where the skirt actually is), blending down to bare trunk BARK on
+// the lower trunk. Mask = world height (Joshua's branches sit above the first fork; the
+// lower trunk stays bare). Albedo + roughness blend; thatch normal carries the leaf
+// bumps. Falls back to plain thatch/bark if a map is missing.
+export function makeThatchBarkMaterial(assets = {}) {
+  if (!assets.thatchTexture || !assets.barkTexture) return makeBarkMaterial({ ...assets, barkTexture: assets.thatchTexture ?? assets.barkTexture, barkNormal: assets.thatchNormal ?? assets.barkNormal, barkRoughness: assets.thatchRoughness ?? assets.barkRoughness });
+  const mat = new MeshStandardNodeMaterial({
+    map: assets.thatchTexture, normalMap: assets.thatchNormal ?? assets.barkNormal ?? null,
+    roughnessMap: assets.thatchRoughness ?? assets.barkRoughness ?? null, roughness: 1, metalness: 0,
+  });
+  const barkC = texture(assets.barkTexture), thatchC = texture(assets.thatchTexture);
+  const barkR = texture(assets.barkRoughness ?? assets.thatchRoughness), thatchR = texture(assets.thatchRoughness ?? assets.barkRoughness);
+  const loY = uniform(assets.thatchLoY ?? 0.6), hiY = uniform(assets.thatchHiY ?? 1.5);
+  const m = smoothstep(loY, hiY, positionWorld.y); // 0 low (bark) → 1 high (thatch)
+  mat.colorNode = mix(barkC.rgb, thatchC.rgb, m);
+  mat.roughnessNode = mix(barkR.r, thatchR.r, m);
+  mat.positionNode = barkWindPosition();
   return mat;
 }
 
@@ -294,30 +334,53 @@ function lodLevels(species, opts = {}) {
   //   'LOD1 …' sliders → extra card LOD #1 (internal LOD3, app-labelled LOD1)
   //   'LOD2 …' sliders → extra card LOD #2 (internal LOD4, app-labelled LOD2)
   //   'Billboard at (m)' → the billboard (unchanged)
-  // (Rosettes have no branch cards → buildDichotomousTree ignores mobileTarget.)
-  const NEAR_BUDGET = 0.15; // fixed budget frac for the reference near model
+  // (Rosette species build their own mobile ladder in buildDichotomousTree.)
   base[0].hiddenInApp = true;
   base[1].hiddenInApp = true;
-  // Near visible LOD = the reference mobile model: full-density cards over the
-  // thinned twig skeleton, at a FIXED budget/prune so the LOD1/LOD2 sliders no
-  // longer bleed into it (that was the mis-targeting — the desktop LOD2 recipe
-  // read lod2Pct/lod2Density/lod2Prune).
-  base[2].distance = 0;
-  base[2].budgetFrac = NEAR_BUDGET;
-  base[2].prune = 0.35;
-  base[2].cards = { growScale: growFor(1), keepFraction: 1 };
-  const q2 = Math.min(1, q * pct2 * 2.4);
-  // One cheaper card level. budget% × density scales the branch budget as a
-  // fraction of the near model; keepMul is the baseline card thinning per level.
-  const extraCard = (name, dist, pct, density, prune, keepMul, stride) => ({
-    name, distance: dist, prune, keepTwigs: true, appOnly: true,
-    budgetFrac: Math.max(0.02, (pct / 100) * density * NEAR_BUDGET),
-    radialScale: Math.min(1, q2 * keepMul), ringStride: stride,
-    foliage: clusters,
-    cards: { growScale: growFor(keepMul * density), keepFraction: keepMul * density },
+  // MOBILE LADDER = the impostor CURVE: each rung down bakes a BIGGER slice of the
+  // tree into each card and DELETES the geometry that slice replaces. The near LOD
+  // is the hybrid reference — full twig skeleton + per-twig cards. LOD3 collapses
+  // each level-(maxL-1) limb (branch + its twigs + leaves) into ONE card; LOD4
+  // collapses a level higher. Real geometry recedes toward the trunk while cards
+  // get FEWER and LARGER — so both tris and instances step down for real, and the
+  // last hop to the 2-card billboard is a short one. meshQuality (the Twig/skeleton
+  // quality slider) scales the facets of whatever real tubes each rung keeps.
+  // Budget solver stays OFF (its radialScale correction floors at seg=3 and
+  // collapsed levels to the same count) — the steps are EXPLICIT and predictable.
+  const maxL = (species.params?.levels ?? 3) - 1;
+  // rung: cardLevel = branch level that roots each card; keepTwigs = keep the real
+  // tubes at/below cardLevel (hybrid) vs DELETE them (collapse). Each rung is a
+  // DISTINCT step so the ramp is real:
+  //   LOD2 (near, dist 0)  — real twigs + FOLIAGE-ONLY per-twig cards. The card
+  //     must not contain the twig tube here: the real cylinder + a picture of the
+  //     same cylinder side by side reads as a doubled twig at the near view.
+  //   LOD3 — first collapse: twig tubes DELETED, full twig+leaves cards replace
+  //     them (hundreds of singles overlap; no crossing needed).
+  //   LOD4 — limb collapse ONE level up: each level-(maxL-1) limb bakes to a
+  //     CROSSED card pair, tubes at/below deleted. One level (not two) keeps
+  //     enough cards for crown-top coverage; the trunk always stays real.
+  const rung = (name, dist, cardLevel, keepTwigs, radialScale, ringStride, keep, prune) => ({
+    name, distance: dist, prune, cardLevel, keepTwigs,
+    radialScale: Math.max(0.15, Math.min(1, radialScale * q)), // × Twig/skeleton quality
+    ringStride,
+    appOnly: name === 'LOD3' || name === 'LOD4',
+    foliage: clusters, budgetFrac: 0, // explicit steps, no solver
+    // A lone flat LIMB card is the whole canopy where it stands and vanishes
+    // edge-on — cross it like the billboard. Twig cards overlap; keep them single.
+    cards: { growScale: growFor(1), keepFraction: keep, crossed: cardLevel < maxL },
   });
-  base.push(extraCard('LOD3', opts.lod1Dist ?? 35, opts.lod1Pct ?? 50, opts.lod1Density ?? 1, opts.lod1Prune ?? 0, 0.6, 3));
-  base.push(extraCard('LOD4', opts.lod2Dist ?? 70, opts.lod2Pct ?? 15, opts.lod2Density ?? 1, opts.lod2Prune ?? 0.35, 0.35, 4));
+  // Near (effective LOD0, dist 0) — reference mobile model. Terminal twigs are
+  // 3-sided prisms decimated to ~base+tip (the ≤10k mobile-near budget lives or
+  // dies on twig tube tris — they dominate the count).
+  Object.assign(base[2], rung('LOD2', 0, maxL, true, 0.6, 2, 1.0, 0.05),
+    { appOnly: false, hiddenInApp: false, terminalSides: 3, terminalRingStride: 4 });
+  // Density sliders thin the cards. PRUNE IS OFF on the mobile card rungs: the
+  // prune sliders are DESKTOP dials (hidden in mobile mode), yet their values
+  // leaked in here — lod2Prune's 0.35 default silently deleted a third of the
+  // limb cards, tearing big holes in sparse crowns (the sweetgum gap). A card
+  // costs ~4 tris; a missing limb card costs a hole. Not worth it.
+  base.push(rung('LOD3', opts.lod1Dist ?? 35, maxL, false, 0.5, 3, Math.min(1, opts.lod1Density ?? 1), 0));
+  base.push(rung('LOD4', opts.lod2Dist ?? 70, Math.max(1, maxL - 1), false, 0.4, 4, Math.min(1, opts.lod2Density ?? 1), 0));
   return base;
 }
 
@@ -337,6 +400,7 @@ export function buildTree(species, seed, assets = {}, lodOpts = {}, reuse = null
 
   const rng = new Rng(`${species.name}:${seed}`);
   const { stems, tips } = generateSkeleton(species.params, rng);
+  const maxLevel = stems[0]?.maxLevel ?? 0;
   const terminalStems = stems.filter((s) => s.level === s.maxLevel);
   const barkMat = assets.barkMat ?? makeBarkMaterial(assets);
 
@@ -355,20 +419,40 @@ export function buildTree(species, seed, assets = {}, lodOpts = {}, reuse = null
     level.userData.lodName = lv.name;
     level.userData.hiddenInApp = !!lv.hiddenInApp; // mobile: mesh LODs kept but never rendered
     level.userData.appOnly = !!lv.appOnly;         // mobile: extra card LODs, not exported
+    if (lv.cardLevel != null) level.userData.cardLevel = lv.cardLevel; // which branch level collapsed to cards (debug/inspect)
 
     // Baked branch cards replace terminal twig foliage; unless the level keeps
     // its twig skeleton (keepTwigs — the hybrid look), the terminal cylinders
     // drop out of the branch mesh too. Rosette species keep real geometry at
     // every level (LOD via density) — the card bake assumes the leaf grammar.
     const useCards = !!(lv.cards && lodOpts.branchCards && leavesOn) && species.foliageType !== 'rosette';
-    let meshStems = useCards && !lv.keepTwigs ? stems.filter((s) => s.level < s.maxLevel) : stems;
+    // Which branch level roots this level's cards. Default = the deepest (per-twig
+    // cards). Mobile LODs step it UP the tree (lv.cardLevel) so each card is a whole
+    // LIMB baked to a billboard — and every stem at/below that level is DELETED here,
+    // so the collapsed limbs leave no floating cylinders behind (the mobile bug).
+    const cardLevel = useCards ? Math.min(maxLevel, lv.cardLevel ?? maxLevel) : maxLevel;
+    let meshStems = (useCards && !lv.keepTwigs) ? stems.filter((s) => s.level < cardLevel) : stems;
+    // The stems that ROOT a card at this level (terminals when cardLevel===maxLevel).
+    let cardRoots = useCards ? stems.filter((s) => s.level === cardLevel && s.points.length >= 2) : terminalStems;
     let levelTerminals = terminalStems;
-    if (lv.prune > 0) {
-      // SpeedTree-style branch removal: the thinnest branches of the deepest
-      // remaining level vanish first, and their FOLIAGE goes with them — real
-      // leaves AND baked cards. (Cards used to stay put, but the twig cylinders
-      // are subpixel at LOD2 distance, so the prune dial visibly did NOTHING;
-      // the cards ARE the canopy at that range.)
+    if (useCards) {
+      // Thin the CARDS from the thinnest limbs up; if the twig skeleton is kept
+      // (desktop hybrid) drop those limbs' cylinders with them. NEVER prune the
+      // tree's top 20% (by card base height): the crown-top limbs are the THINNEST
+      // (Weber-Penn shape ratio), so pure radius-sorted pruning scalped the
+      // silhouette and left the trunk tip poking bare out of the canopy.
+      if (lv.prune > 0 && cardRoots.length) {
+        const ys = cardRoots.map((s) => s.points[0].y).sort((a, b) => a - b);
+        const yCap = ys[Math.min(ys.length - 1, Math.floor(ys.length * 0.8))];
+        const candidates = cardRoots.filter((s) => s.points[0].y <= yCap)
+          .sort((a, b) => a.radii[0] - b.radii[0]);
+        const drop = new Set(candidates.slice(0, Math.floor(cardRoots.length * lv.prune)));
+        cardRoots = cardRoots.filter((s) => !drop.has(s));
+        if (lv.keepTwigs) meshStems = meshStems.filter((s) => !drop.has(s));
+      }
+    } else if (lv.prune > 0) {
+      // SpeedTree-style branch removal on real-leaf levels: the thinnest branches of
+      // the deepest remaining level vanish first, and their FOLIAGE goes with them.
       const deepest = Math.max(...meshStems.map((s) => s.level));
       if (deepest > 0) {
         const candidates = meshStems.filter((s) => s.level === deepest)
@@ -383,7 +467,14 @@ export function buildTree(species, seed, assets = {}, lodOpts = {}, reuse = null
     let leafInstances = 0;
     if (useCards) {
       const frng = new Rng(`${species.name}:${seed}:cards${i}`);
-      foliage = buildCardFoliage(levelTerminals, lodOpts.branchCards, frng, lv.cards);
+      // Pick the card set baked at THIS level + content. keepTwigs (hybrid) levels
+      // use FOLIAGE-ONLY cards — the real tubes render, so a tube baked into the
+      // card would double every twig; collapse levels use the full twig+leaves bake.
+      const setKey = `${cardLevel}:${lv.keepTwigs ? 'fol' : 'full'}`;
+      const cardsSet = lodOpts.branchCards.byLevel?.get(setKey)
+        ?? lodOpts.branchCards.byLevel?.get(`${cardLevel}:full`)
+        ?? lodOpts.branchCards;
+      foliage = buildCardFoliage(cardRoots, cardsSet, frng, lv.cards);
       if (foliage) leafInstances = foliage.children.reduce((n, c) => n + c.count, 0);
     } else if (species.foliageType === 'rosette' && species.foliage !== false) {
       if (assets.rosetteMat) {
@@ -422,6 +513,8 @@ export function buildTree(species, seed, assets = {}, lodOpts = {}, reuse = null
       tileWorldSize: species.tileWorldSize ?? 1.5,
       radialScale: lv.radialScale,
       ringStride: lv.ringStride,
+      terminalSides: lv.terminalSides,      // mobile near: twigs as 3-sided prisms
+      terminalRingStride: lv.terminalRingStride,
     };
     let geo = buildBranchGeometry(meshStems, gopts);
     if (lv.budgetFrac && total0 > 0) {

@@ -49,13 +49,23 @@ export function buildBranchGeometry(stems, opts = {}) {
 
   for (const stem of stems) {
     const { lobes, lobeDepth } = stem;
-    const seg = Math.max(3, Math.round(stem.radialSegments * radialScale));
-    // LOD ring decimation: keep every ringStride-th cross-section plus the tip,
+    const isTerminal = stem.level === stem.maxLevel;
+    // Mobile near LOD: terminal twigs collapse to fixed low-poly prisms —
+    // terminalSides (3 = triangular tube) + terminalRingStride (4 ⇒ most twigs
+    // keep just base+tip, i.e. dead straight along their chord — which is also
+    // what keeps the chord-hugging foliage-only cards attached to them).
+    const seg = (isTerminal && opts.terminalSides)
+      ? Math.max(3, Math.round(opts.terminalSides))
+      : Math.max(3, Math.round(stem.radialSegments * radialScale));
+    const stride = (isTerminal && opts.terminalRingStride)
+      ? Math.max(ringStride, Math.round(opts.terminalRingStride))
+      : ringStride;
+    // LOD ring decimation: keep every stride-th cross-section plus the tip,
     // so all LOD levels share identical stem endpoints (no silhouette pop).
     let points = stem.points, radii = stem.radii, stemWinds = stem.winds ?? null;
-    if (ringStride > 1 && points.length > 2) {
+    if (stride > 1 && points.length > 2) {
       const P = [], R = [], W = [];
-      for (let i = 0; i < points.length - 1; i += ringStride) {
+      for (let i = 0; i < points.length - 1; i += stride) {
         P.push(points[i]); R.push(radii[i]);
         if (stemWinds) W.push(stemWinds[i]);
       }

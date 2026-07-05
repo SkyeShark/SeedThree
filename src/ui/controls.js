@@ -161,7 +161,7 @@ export function buildGUI(opts) {
     // density, quality → cone/rib detail. Temperate path keeps its card/budget dials.
     cLod1Pct.show(!m && !isRosette); cLod2Pct.show(!m && !isRosette);
     cLod1Prn.show(!m && !isRosette); cLod2Prn.show(!m && !isRosette);
-    cMeshQ.name(isRosette ? (isCactus ? 'Rib & spine detail' : 'Rosette cone detail')
+    cMeshQ.name(isRosette ? (isCactus ? 'Rib & spine detail' : 'Mesh detail')
                           : (m ? 'Twig / skeleton quality' : 'LOD0 mesh quality'));
     const denLabel = isCactus ? 'spine density' : isRosette ? 'rosette density' : m ? 'card density' : 'foliage density';
     cLod1Den.name(`LOD1 ${denLabel}`);

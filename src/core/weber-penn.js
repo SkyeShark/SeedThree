@@ -129,7 +129,7 @@ export function generateSkeleton(userParams, rng) {
   return { stems, tips, params: p };
 }
 
-function buildStem({ level, origin, orient, length, radius, p, rng, stems, tips }) {
+function buildStem({ level, origin, orient, length, radius, p, rng, stems, tips, parentId }) {
   const curveRes = Math.max(2, p.curveRes[level] | 0);
   const segLen = length / curveRes;
   const uTaper = unitTaper(p.taper[level]);
@@ -234,6 +234,12 @@ function buildStem({ level, origin, orient, length, radius, p, rng, stems, tips 
     lobeDepth: p.lobeDepth,
     maxLevel: p.levels - 1,
   };
+  // Branch topology (DFS insertion order): id = index in `stems`, parentId points
+  // at the stem this one grew from (-1 for a trunk). Lets a consumer gather a
+  // stem's whole SUBTREE (branch + its twigs + leaves) — used by the sub-branch
+  // card baker to collapse a limb into one billboard on reduced/mobile LODs.
+  stem.id = stems.length;
+  stem.parentId = parentId ?? -1;
   stems.push(stem);
 
   // Record a foliage attachment tip for terminal stems.
@@ -326,6 +332,7 @@ function buildStem({ level, origin, orient, length, radius, p, rng, stems, tips 
       // fork children flare their base to the parent radius here → joined split
       flareBase: tipC > 0.5 ? pradiusHere : undefined,
       p, rng, stems, tips,
+      parentId: stem.id, // topology link — lets consumers gather whole subtrees
     });
   }
 }

@@ -299,7 +299,12 @@ export function buildYuccaFoliage(terminalStems, cfg, rng, material, allStems = 
   // (and the trunk's upper reaches). Color ramps by world height — brown-yellow
   // just under the green rosette → gray/bark toward the base (dead leaves
   // compacting into "bark").
-  const skirtStems = allStems ?? terminalStems;
+  // skirtToBark (reduced/mobile LODs): the LOWER dead-leaf skirt is baked into the
+  // thatch bark on the tube, so most skirt geometry is dropped — but a SHORT top skirt
+  // (the ~2 yellow cones just under each green crown, below) stays as real geometry for
+  // the silhouette. Only the crowned (terminal) arms carry that top skirt; the trunk +
+  // structural arms are fully bark. (This + density thinning is the big triangle cut.)
+  const skirtStems = c.skirtToBark ? terminalStems : (allStems ?? terminalStems);
   const step = c.thatchStep ?? 0.12;
   // BABY / new-growth tree: the plant hasn't forked yet, so the trunk IS the
   // whole visible plant (every crown sits on a level-0 stem, no arms). In that
@@ -325,17 +330,21 @@ export function buildYuccaFoliage(terminalStems, cfg, rng, material, allStems = 
     //  • FORK parent → 0.0: the diverging arms leave the crotch bare, so cover it.
     const isContPar = stem.children && stem.children.length === 1 && stem.children[0].level === stem.level;
     const start = (stem.terminal || isContPar) ? 0.12 : 0.0;
-    // trunk-fork: only the top ~0.45 m (near the crotch) is skirted.
-    const end = trunkFork ? Math.min(total * 0.99, 0.45) : total * 0.99;
-    // Thin the skirt COHERENTLY + BOTTOM-UP at reduced density (LOD / mobile): the
-    // keep-fraction ramps from 1 just under the crown (top) down to ~2·density−1 at
-    // the base, so the reduction eats the LOWEST, least-visible skirt FIRST while the
-    // colourful top stays full — and the surviving cones stay EVENLY spaced at every
-    // depth (never random clumps+gaps, which look broken when a thinned level is the
-    // NEAR view in mobile mode). Average keep ≈ density, so the tri budget still holds.
-    const dspan = Math.max(0.1, end - start);
-    const stepAt = (b) => step / Math.max(0.1, 1 - ((b - start) / dspan) * 2 * (1 - c.density));
-    for (let back = start; back < end; back += stepAt(back)) {
+    // trunk-fork: only the top ~0.45 m (near the crotch) is skirted. skirtToBark: only
+    // the top ~0.3 m (the ~2 YELLOW cones just under the crown) stay as geometry — their
+    // age ramp colours them yellow-dry; the grey driest drape below is the thatch bark.
+    const end = trunkFork ? Math.min(total * 0.99, 0.45)
+              : c.skirtToBark ? Math.min(total * 0.99, start + 0.3)
+              : total * 0.99;
+    // WHOLE-PLANT bottom-up coherent thinning at reduced density (LOD / mobile): march
+    // at the FINE step and keep cones via an accumulator whose rate is the keep-fraction
+    // at the cone's WORLD height (downFrac, below) — full near the crowns, sparse toward
+    // the ground. Keying it to GLOBAL height (not the per-segment position) means density
+    // is consistent across every segment → one smooth global gradient, never the
+    // per-segment dense-top/sparse-bottom banding (= patches) the earlier per-stem ramp
+    // produced. Even + deterministic (accumulator, not random). Average keep ≈ density.
+    let keepAcc = 0;
+    for (let back = start; back < end; back += step) {
       frameAt(stem, back, rp);
       // shift the anchor up its own branch tangent (learned heuristic — see above),
       // with EXTRA lift for the topmost cones (the "cap" just under the green
@@ -351,6 +360,13 @@ export function buildYuccaFoliage(terminalStems, cfg, rng, material, allStems = 
       // trunked at the bottom, skirted up top).
       if (babyTree && isTrunk && rp.pos.y < babyBareY) continue;
       const downFrac = Math.max(0, Math.min(1, (maxY - rp.pos.y) / Math.max(0.6, maxY - baseY)));
+      // WHOLE-PLANT bottom-up keep: dense at the crowns (downFrac→0), sparse at the base
+      // (downFrac→1). The accumulator gives even spacing at each height with NO per-
+      // segment banding, because the rate depends only on world height (shared across
+      // every segment). At density=1 keepK=1 → every cone kept (full skirt).
+      keepAcc += Math.max(0.12, 1 - downFrac * 2 * (1 - c.density));
+      if (keepAcc < 1) continue;
+      keepAcc -= 1;
       // pick the skirt band smoothly across the 8-band gradient (no puffy step)
       const band = Math.min(SKIRT_BANDS - 1, Math.floor(downFrac * SKIRT_BANDS));
       const bandOpen = CONES[CROWN_N + band].open * Math.PI / 180;

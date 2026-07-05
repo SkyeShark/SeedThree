@@ -5,18 +5,18 @@
 //   normal       per-pixel GEOMETRIC normals in WORLD space — leaf-clump
 //                lumpiness and trunk curvature, used as detail
 //   roughness    from each source material's roughness map
-//   translucency from each source material's diffuse-transmission map, so the
-//                billboard keeps the sun-through-leaves glow of the near LODs
+//   translucency from each source material's diffuse-transmission map — baked
+//                for pipeline symmetry but NOT applied to the live card or the
+//                export (SSS on a flat far card black-crushed the shadow side
+//                and bloomed backlit; see makeCardMaterial)
 //
-// Shading shape uses the AAA vegetation trick on TWO layers that compose:
-//  1. Base: a canopy-sphere normal field evaluated from WORLD POSITION in the
-//     shader (and mirrored into the mesh vertex normals for export). Both cards
-//     sample the same world-space field, so shading is continuous across the
-//     cross intersection — per-card local bending would (and did) leave a hard
-//     seam where the planes meet.
-//  2. Detail: the baked world-space normal map blended in at low strength for
-//     per-pixel foliage sparkle. Normal maps render relative to mesh normals,
-//     so both layers cooperate rather than fight.
+// Shading shape: a per-pixel canopy-dome normalNode evaluated from WORLD
+// position (makeCardMaterial) — rotation-symmetric, so the front and side cards
+// agree wherever they coincide in world space (no seam at the cross
+// intersection), and immune to the DoubleSide back-face normal flip that turned
+// a card viewed from behind solid black. No SSS/translucency and no normal-map
+// detail on the live card; the corner vertex dome in bentNormalCardGeometry
+// rides the glTF export for engines that can't run the shader.
 //
 // WebGPU path: renderer.setRenderTarget + renderAsync + readRenderTargetPixelsAsync.
 // Albedo gets linear→sRGB (render targets skip the output transform); data
@@ -162,12 +162,18 @@ function captureMaterial(srcMesh, channel) {
   return m;
 }
 
-// Bent vertex normals for export: the same canopy-sphere field the shader uses,
-// baked into the mesh. Radial in the card plane with the sphere centre dropped
-// (up-bias) — crucially z=0 and rotation-symmetric, so the front and side cards
-// agree wherever they coincide in world space (no seam at the intersection).
+// Bent vertex normals for the glTF EXPORT only — a coarse dome for engines that
+// can't run our shader. The LIVE card ignores them: DoubleSide back faces flip
+// vertex normals (black-card bug), so live shading uses the per-pixel dome
+// normalNode in makeCardMaterial instead. Radial in the card plane with the
+// sphere centre dropped (up-bias) — crucially z=0 and rotation-symmetric, so the
+// front and side cards agree wherever they coincide (no seam at the intersection).
 function bentNormalCardGeometry(w, h) {
-  const geo = new PlaneGeometry(w, h, 6, 6);
+  // A billboard is exactly two flat alpha cards → ONE quad each (4 verts, 2 tris).
+  // The live dome is per-pixel in the shader, so subdividing buys nothing on
+  // screen; the 4 corner normals below are only the export fallback. Previously
+  // 6×6 = 72 tris/plane (144/billboard) for zero live gain.
+  const geo = new PlaneGeometry(w, h, 1, 1);
   const pos = geo.attributes.position;
   const nrm = geo.attributes.normal;
   const v = new Vector3();
@@ -185,44 +191,52 @@ function bentNormalCardGeometry(w, h) {
 const TRANSMIT = [0.42, 0.62, 0.24]; // same transmitted green as the live foliage
 
 function makeCardMaterial(t, cardH) {
+  // Live volume shading = the analytic canopy-dome normalNode below. It must be a
+  // normalNode (not the mesh vertex normals): DoubleSide materials FLIP vertex
+  // normals on back faces, so whichever crossed card you viewed from behind had
+  // its up-biased dome pointed DOWN → the whole card rendered solid black. The
+  // normalNode bypasses the flip — a volume's dark side is the side away from the
+  // SUN, never the side away from the camera. Evaluated from WORLD position
+  // relative to the card origin, so both crossed cards sample the identical field
+  // (no seam at the intersection). The corner vertex dome in
+  // bentNormalCardGeometry remains for the glTF EXPORT only.
+  //
+  // NO DIRECTIONAL TRANSLUCENCY on the impostor: the backlit power term BLOOMED
+  // whenever the sun sat behind the card (glowing patches) — thicknessScale is
+  // pinned to 0. But the near LODs' foliage all carries the flat AMBIENT scatter
+  // tint (thicknessAmbient × transmitted green), and without it the billboard's
+  // leaves read a DIFFERENT COLOR at the last switch — so that one non-directional
+  // term stays, scaled by the ~0.7 average per-instance thickness the cards get.
   const mat = new MeshSSSNodeMaterial({
-    map: t.albedo, normalMap: t.normal, roughnessMap: t.rough,
+    map: t.albedo, roughnessMap: t.rough,
     alphaTest: 0.35, side: DoubleSide, roughness: 1.0, metalness: 0.0,
   });
-  // Live normal = canopy-sphere base (from WORLD position relative to the card's
-  // origin = canopy centre, so both cards evaluate the identical field — this is
-  // what kills the seam at the cross intersection) + baked world-space geometric
-  // normals as low-strength per-pixel detail. No face flip: a volume's far side
-  // should stay its dark side. Exports fall back to the mesh vertex normals +
-  // the baked map, same two layers.
-  const origin = modelWorldMatrix.mul(vec4(0, 0, 0, 1)).xyz;
-  // Canopy-sphere normal, leaned 30% toward world-UP so a card's shadowed
-  // hemisphere catches sky light instead of rendering fully BLACK at distance
-  // (the Joshua impostors' dense dark rosette was reading as black shadow). Still
-  // keeps enough radial curvature to read as a lit volume, not a flat card.
-  const radial = positionWorld.sub(origin).add(vec3(0, cardH * 0.55, 0)).normalize();
-  const base = mix(radial, vec3(0, 1, 0), 0.30).normalize();
-  // Additive perturbation (not a lerp): detail tilts the base without diluting
-  // it, the way a tangent normal map perturbs mesh normals — this is what makes
-  // trunk/branch roundness actually pop through.
-  const detail = texture(t.normal).xyz.mul(2).sub(1);
-  const nWorld = base.add(detail.mul(0.55)).normalize();
-  mat.normalNode = cameraViewMatrix.mul(vec4(nWorld, 0)).xyz.normalize();
-  // GTAO exclusion: this flat billboard keeps its bent normalNode for lighting,
-  // but writes aomask=0 to the scene MRT so screen-space AO skips it entirely —
-  // no whole-card blackout (bent normals face away from camera) and no dark
-  // X-seam where the crossed cards intersect (the crease bent normals hide). The
-  // scene pass carries {output, normal, aomask}; real geometry defaults aomask=1.
-  mat.mrtNode = mrt({ output, normal: normalView, aomask: float(0) });
-  // Backlit transmission from the baked translucency — the distant tree keeps
-  // glowing when the sun is behind it, matching the near LODs.
-  mat.thicknessColorNode = texture(t.trans).r.mul(uniform(new Color().setRGB(...TRANSMIT)));
-  mat.thicknessDistortionNode = uniform(0.3);
-  mat.thicknessAmbientNode = uniform(0.16); // scatter floor — see leaf-cards.js
+  mat.thicknessColorNode = texture(t.trans).r.mul(0.7).mul(uniform(new Color().setRGB(...TRANSMIT)));
+  mat.thicknessDistortionNode = uniform(0.0);
+  mat.thicknessAmbientNode = uniform(0.16); // scatter floor — matches leaf/card LODs
   mat.thicknessAttenuationNode = uniform(1.0);
   mat.thicknessPowerNode = uniform(6.0);
-  mat.thicknessScaleNode = uniform(3.0);
-  mat.userData.gltfDiffuseTransmission = { factor: 1.0, color: TRANSMIT, map: t.trans };
+  mat.thicknessScaleNode = uniform(0.0);    // directional backlit bloom OFF
+  // Canopy-sphere normal with the SAME up-bias as the live branch cards (+0.45
+  // additive up — brightness parity across the LOD chain). CRUCIAL: the model
+  // origin here is the CARD CENTRE (mid-canopy), not the tree base — the forest
+  // twin reads a per-instance tree-base origin, which is why distant impostors
+  // lit fine while the hero's trunk went BLACK: pixels below the card centre got
+  // downward radials. Drop the sphere centre 0.55·cardH below the card (bottom
+  // edge is 0.5h) so no radial ever points down — the original trunk-base fix.
+  const origin = modelWorldMatrix.mul(vec4(0, 0, 0, 1)).xyz;
+  const dome = positionWorld.sub(origin).add(vec3(0, cardH * 0.55, 0)).normalize()
+    .add(vec3(0, 0.45, 0)).normalize();
+  // Baked world-space geometric normals ride on top as ADDITIVE low-strength
+  // per-pixel detail — trunk roundness and leaf-clump lumpiness respond to the
+  // sun at the same per-pixel resolution as the albedo, while the dome keeps the
+  // volume shape (additive tilt, not a lerp, so it never dilutes the base).
+  const detail = texture(t.normal).xyz.mul(2).sub(1);
+  const nWorld = dome.add(detail.mul(0.55)).normalize();
+  mat.normalNode = cameraViewMatrix.mul(vec4(nWorld, 0)).xyz.normalize();
+  // GTAO exclusion: write aomask=0 to the scene MRT so screen-space AO skips the flat
+  // card entirely — no whole-card blackout, no dark X-seam at the crossed-card crease.
+  mat.mrtNode = mrt({ output, normal: normalView, aomask: float(0) });
   return mat;
 }
 

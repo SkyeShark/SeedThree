@@ -78,11 +78,18 @@ export function instancedBarkWindPosition() {
 // surface does. The whole card shares its anchor's phase (a rigid
 // translation; losing the sub-30cm phase gradient across one leaf is
 // invisible). Flutter scales by leaf-LOCAL height: zero at the anchor.
-export function foliageWindPosition() {
+export function foliageWindPosition(withFlutter = true) {
   const windLocal = attribute('aWindVec', 'vec3'); // heading × weight, instance frame
   const anchorWorld = modelWorldMatrix.mul(vec4(attribute('aAnchorPos', 'vec3'), 1)).xyz;
-  const rnd = attribute('aThickness', 'float'); // 0.4..1 per instance
   const base = windLocal.mul(swayAt(anchorWorld).mul(windStrength.mul(0.35)));
+  // withFlutter=false: CROSSED card pairs skip the flutter term entirely. Its
+  // phase rides the RANDOM per-instance aThickness and its vector is instance-
+  // LOCAL, so the two halves of a cross flutter apart at the shared seam. The
+  // base sway alone is world-identical across the pair (aWindVec is per-copy
+  // pre-rotated) → the cross stays welded. aThickness itself must stay random —
+  // it also drives SSS thickness color (zeroing it shifted the leaf color).
+  if (!withFlutter) return positionLocal.add(base);
+  const rnd = attribute('aThickness', 'float'); // 0.4..1 per instance
   const local = positionGeometry.y.max(0.0);
   const flutterT = time.mul(windSpeed).mul(5.2).add(rnd.mul(37.7));
   const flutter = vec3(sin(flutterT), sin(flutterT.mul(1.31)).mul(0.6), sin(flutterT.mul(0.77)))
