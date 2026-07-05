@@ -179,7 +179,11 @@ function buildStem({ level, origin, orient, length, radius, p, rng, stems, tips 
     // — so arms stay nearly trunk-thick and only the final tip narrows.
     const z = i / curveRes;
     let r = radius * (1 - uTaper * z);
-    if (level === p.levels - 1) r = radius * (1 - z); // final level tapers to point
+    // The terminal level tapers to a point by DEFAULT (taper 1 ⇒ uTaper 1 ⇒ the
+    // same radius*(1-z)), but only force it when taper is left at default — so an
+    // edited terminal taper (e.g. L2 taper 0) actually takes effect. Open ends
+    // from a lowered taper are sealed by the tip cap in branch-mesh.js.
+    if (level === p.levels - 1 && (p.taper[level] ?? 1) >= 0.99) r = radius * (1 - z);
     r = Math.max(r, 0.002);
 
     points.push(pos.clone());

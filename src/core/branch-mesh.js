@@ -168,8 +168,9 @@ export function buildBranchGeometry(stems, opts = {}) {
       winds.push(lastWind);
       centers.push(tp.x, tp.y, tp.z);
       const ringStart = vertBase + (rings - 1) * ringVerts;
-      // wind CCW so the fan faces along +tangent (matches the tube's outward faces)
-      for (let j = 0; j < seg; j++) indices.push(ringStart + j + 1, centerIdx, ringStart + j);
+      // Ring verts wind CLOCKWISE around +tangent (radial spins N→B about −T), so
+      // centre→ring[j+1]→ring[j] is CCW as seen from outside the tip → front face.
+      for (let j = 0; j < seg; j++) indices.push(centerIdx, ringStart + j + 1, ringStart + j);
       extraVerts = 1;
     }
 
