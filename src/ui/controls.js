@@ -89,7 +89,7 @@ export function applySpeciesControls(species, c) {
  *   stats: { species, seed, stems, leaves, triangles } — updated via returned api
  */
 export function buildGUI(opts) {
-  const { speciesMap, state, sunState, envState, optState, windState, camState, onChange, onRandomize, onExport, onExportPNG, onSun, onScaleRef, onFog, onWind, onForest, onSpom, onOpt, onCamera } = opts;
+  const { speciesMap, state, sunState, envState, optState, windState, camState, onChange, onRandomize, onExport, onExportPNG, onSun, onScaleRef, onFog, onWind, onForest, onSpom, onOpt, onCamera, onLoadRebuild } = opts;
   const gui = new GUI({ title: '' });
 
   // Branding header (Codex-generated logo + wordmark; falls back to plain text
@@ -222,6 +222,44 @@ export function buildGUI(opts) {
   gui.add({ export: () => onExport() }, 'export').name('⬇ Download .glb');
   if (onExportPNG) gui.add({ png: () => onExportPNG() }, 'png').name('📷 Export PNG');
 
+  // Save / Load preset (ez-tree parity): the whole editable state (species +
+  // curated controls + advanced per-level overrides + growth force + seed) round-
+  // trips through a small JSON file, so a tuned tree is shareable and reloadable.
+  function applyPreset(preset) {
+    const key = preset?.species;
+    if (!key || !speciesMap[key]) { console.error('[preset] unknown species:', key); return; }
+    state.speciesKey = key;
+    // Merge over fresh defaults so a preset from an older version still fills gaps.
+    state.controls = { ...controlsFromSpecies(speciesMap[key]), ...(preset.controls || {}) };
+    proxy.species = speciesMap[key].name;
+    Object.assign(proxy, state.controls);
+    buildParamControls();
+    buildAdvancedControls();
+    gui.controllersRecursive().forEach((c) => c.updateDisplay());
+    onLoadRebuild?.(); // main.js: biome + build for the loaded state (no controls reset)
+  }
+  const savePreset = () => {
+    const preset = { format: 'seedthree-preset/1', species: state.speciesKey, controls: state.controls };
+    const blob = new Blob([JSON.stringify(preset, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${speciesMap[state.speciesKey].name.replace(/\s+/g, '_')}_seed${state.controls.seed}.seedthree.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+  };
+  const loadPreset = () => {
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = '.json,application/json';
+    inp.onchange = async () => {
+      const f = inp.files?.[0]; if (!f) return;
+      try { applyPreset(JSON.parse(await f.text())); }
+      catch (e) { console.error('[preset] load failed:', e); }
+    };
+    inp.click();
+  };
+  const io = gui.addFolder('Save & Load');
+  io.add({ save: () => savePreset() }, 'save').name('💾 Save preset');
+  io.add({ load: () => loadPreset() }, 'load').name('📂 Load preset');
+
   // Sections start collapsed — the panel opens as a tidy list of headings.
   gui.foldersRecursive().forEach((f) => f.close());
 
@@ -233,5 +271,5 @@ export function buildGUI(opts) {
     gui.controllersRecursive().forEach((ctrl) => ctrl.updateDisplay());
   }
 
-  return { gui, syncFromState };
+  return { gui, syncFromState, applyPreset };
 }

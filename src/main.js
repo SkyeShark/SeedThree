@@ -1006,7 +1006,7 @@ async function main() {
   }
 
   // ---- GUI ----------------------------------------------------------------
-  const { syncFromState } = buildGUI({
+  const { syncFromState, applyPreset } = buildGUI({
     speciesMap: SPECIES,
     state,
     sunState,
@@ -1014,6 +1014,10 @@ async function main() {
     optState,
     camState,
     onCamera: () => applyCamera(),
+    // Load-preset rebuild: state.speciesKey + state.controls are already set by the
+    // GUI's applyPreset; run the full biome + build for them (heavyRebuild does NOT
+    // reset controls — only the species dropdown's onChange path does).
+    onLoadRebuild: () => heavyRebuild(`Loading ${SPECIES[state.speciesKey].name}…`, () => buildBiome(SPECIES[state.speciesKey])),
     onOpt,
     onSun: () => updateSun(),
     onScaleRef: (v) => { scaleRef.visible = v; },
@@ -1137,7 +1141,7 @@ async function main() {
     renderer.render(scene, camera); // billboard bake runs OFF-THREAD (worker) → viewer paints every frame
   });
 
-  Object.assign(window, { THREE, scene, camera, renderer, state, optState, rebuild: () => { needsRebuild = true; }, _rebuildNow: rebuild });
+  Object.assign(window, { THREE, scene, camera, renderer, state, optState, rebuild: () => { needsRebuild = true; }, _rebuildNow: rebuild, applyPreset });
 }
 
 main().catch((e) => fail(`Init failed: ${e?.stack || e}`));
