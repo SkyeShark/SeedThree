@@ -327,8 +327,15 @@ export function buildYuccaFoliage(terminalStems, cfg, rng, material, allStems = 
     const start = (stem.terminal || isContPar) ? 0.12 : 0.0;
     // trunk-fork: only the top ~0.45 m (near the crotch) is skirted.
     const end = trunkFork ? Math.min(total * 0.99, 0.45) : total * 0.99;
-    for (let back = start; back < end; back += step) {
-      if (c.density < 1 && rng.next() > c.density) continue;
+    // Thin the skirt COHERENTLY + BOTTOM-UP at reduced density (LOD / mobile): the
+    // keep-fraction ramps from 1 just under the crown (top) down to ~2·density−1 at
+    // the base, so the reduction eats the LOWEST, least-visible skirt FIRST while the
+    // colourful top stays full — and the surviving cones stay EVENLY spaced at every
+    // depth (never random clumps+gaps, which look broken when a thinned level is the
+    // NEAR view in mobile mode). Average keep ≈ density, so the tri budget still holds.
+    const dspan = Math.max(0.1, end - start);
+    const stepAt = (b) => step / Math.max(0.1, 1 - ((b - start) / dspan) * 2 * (1 - c.density));
+    for (let back = start; back < end; back += stepAt(back)) {
       frameAt(stem, back, rp);
       // shift the anchor up its own branch tangent (learned heuristic — see above),
       // with EXTRA lift for the topmost cones (the "cap" just under the green
