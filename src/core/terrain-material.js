@@ -27,9 +27,13 @@
 import { DataArrayTexture, RepeatWrapping, SRGBColorSpace, LinearMipmapLinearFilter, LinearFilter, MeshStandardNodeMaterial } from 'three/webgpu';
 import {
   texture, uv, attribute, mix, normalMap, vec2, vec3, vec4, float, int, uniform,
-  Fn, Loop, If, Break, clamp, abs, dot, normalize, max, dFdx, dFdy,
-  positionViewDirection, positionView, tangentView, normalViewGeometry, tangentGeometry, cameraViewMatrix,
+  dFdx, dFdy, positionView, cameraViewMatrix,
 } from 'three/tsl';
+// Silhouette Parallax Occlusion Mapping with self-shadowing — the published
+// three.js contribution (examples/jsm/tsl/utils/ParallaxOcclusion.js), vendored
+// with a small `height` generalization so the terrain's per-pixel dominant-layer
+// height can drive the march. See src/core/parallax-occlusion.js.
+import { parallaxOcclusionUV } from './parallax-occlusion.js';
 
 // ---- CPU: compose the layer arrays -----------------------------------------
 const SIZE = 1024;
@@ -187,89 +191,54 @@ export function buildTerrainMaterial(opts) {
   // every fetch to the lowest mip and streak the height-map average along it.
   const gX = dFdx(rockUv).clamp(-0.1, 0.1), gY = dFdy(rockUv).clamp(-0.1, 0.1);
 
-  // ---- SPOM march (eidoverse recipe, dominant-layer height, wrapping UVs) --
+  // ---- SPOM via the published parallaxOcclusionUV (self-shadowing POM) -------
+  // The terrain feeds a COMPUTED height (the dominant splat layer's packed height,
+  // optionally blended with the ground/gravel height by rockness) into the vendored
+  // march, plus a distance-faded relief depth so the parallax converges to flat far
+  // away. We consume only `uv` (marched coords) and `shadow` (self-shadow) — the
+  // multi-layer albedo/normal are sampled by the terrain's own array taps below.
   let pUV = rockUv;
-  let selfShadow = float(0); // POM self-shadow term (0 = lit)
+  let litNode = float(1); // self-shadow LIT factor (1 = fully lit, 0 = shadowed)
   if (opts.spom !== false) {
     const minLayers = opts.minLayers ?? 16;
-    const maxLayers = opts.maxLayers ?? 48;  // more slices for close-up quality
-    const fadeNear = opts.fadeNear ?? 22;    // full POM within this distance (m)
-    const fadeFar = opts.fadeFar ?? 90;      // flat / no POM beyond this
-    const depthAt = (tuv) => {
-      const rockH = texture(normalArray, tuv).depth(domIdx).level(0).a.oneMinus();
+    const maxLayers = opts.maxLayers ?? 48;
+    const fadeNear = opts.fadeNear ?? 22;   // full relief within this distance (m)
+    const fadeFar = opts.fadeFar ?? 90;     // flat beyond this
+
+    // surface height (white = peak) at a coord: dominant rock layer's packed height
+    // (normalArray alpha), blended with the ground(gravel) height on the flats.
+    const heightAt = (tuv) => {
+      const rockH = texture(normalArray, tuv).depth(domIdx).level(0).a;
       if (!opts.groundParallax || !opts.groundHeight) return rockH; // temperate: rock only
-      // ground (gravel) relief on the flats, rock relief on the hills
-      const gH = texture(opts.groundHeight, tuv).level(0).r.oneMinus();
+      const gH = texture(opts.groundHeight, tuv).level(0).r;
       return mix(gH, rockH, w);
     };
-    const marchRes = Fn(() => {
-      // CANONICAL fix (ParallaxOcclusion.js): build the tangent-space view frame
-      // from the GEOMETRY accessors, NOT the shading normal — the shading normal
-      // (normalView) is itself derived from the marched UV via normalNode, so
-      // using it here makes the march circularly depend on its own result and it
-      // silently produces no displacement. This was the port's bug.
-      const bitangent = normalViewGeometry.cross(tangentView).mul(tangentGeometry.w);
-      const Vts = normalize(vec3(
-        dot(positionViewDirection, tangentView),
-        dot(positionViewDirection, bitangent),
-        dot(positionViewDirection, normalViewGeometry),
-      )).toVar();
-      // near→far fade: full POM up close, converging to FLAT far away — and the
-      // slice budget is spent where it shows.
-      const viewDist = positionView.z.negate();
-      const fade = viewDist.smoothstep(float(fadeNear), float(fadeFar)).oneMinus();
-      // MORE slices up close & at grazing angles, fewer far (perf; it's flat there).
-      const angleLayers = mix(float(maxLayers), float(minLayers), clamp(abs(Vts.z), 0.0, 1.0));
-      const nLayers = mix(float(minLayers), angleLayers, fade).max(float(4));
-      const layerDepth = float(1.0).div(nLayers);
-      // per-material push × ground/rock blend × distance fade. rockness gates it
-      // (desert gravel parallaxes the whole floor; temperate grass stays flat).
-      const groundDScale = float(opts.groundDepthScale ?? 1);
-      const depthScale = opts.groundParallax ? mix(groundDScale, rockDScale, w) : rockDScale;
-      const depth = spomDepth.mul(depthScale).mul(fade).mul(opts.groundParallax ? float(1) : w);
-      const P = Vts.xy.div(max(abs(Vts.z), float(0.12))).mul(depth);
-      const dUV = P.div(nLayers);
-      const curUV = rockUv.toVar();
-      const curLayerDepth = float(0.0).toVar();
-      const curDepth = depthAt(curUV).toVar();
-      Loop({ start: 0, end: maxLayers, type: 'int' }, () => {
-        If(curLayerDepth.greaterThanEqual(curDepth), () => { Break(); });
-        curUV.subAssign(dUV);
-        curLayerDepth.addAssign(layerDepth);
-        curDepth.assign(depthAt(curUV));
-      });
-      // refinement: land on the surface between the last two layers
-      const prevUV = curUV.add(dUV);
-      const after = curLayerDepth.sub(curDepth);
-      const before = depthAt(prevUV).sub(curLayerDepth.sub(layerDepth));
-      const kk = clamp(after.div(max(after.add(before), float(1e-4))), 0.0, 1.0);
-      const hitUV = mix(curUV, prevUV, kk).toVar();
 
-      // --- soft POM self-shadow: a short second march from the hit point toward
-      // the sun in tangent space; where the height field rises above the light
-      // ray, the fragment is occluded. Track the max penetration for a soft edge.
-      const shadow = float(0).toVar();
-      if (opts.sunDir) {
-        const Lview = cameraViewMatrix.mul(vec4(opts.sunDir, 0)).xyz;
-        const Lts = normalize(vec3(dot(Lview, tangentView), dot(Lview, bitangent), dot(Lview, normalViewGeometry)));
-        const hSurf = float(1).sub(depthAt(hitUV)); // surface height (1 = peak)
-        const sSteps = 10;
-        const lStepUV = Lts.xy.div(max(Lts.z, float(0.25))).mul(depth).div(float(sSteps));
-        const hStep = hSurf.oneMinus().div(float(sSteps)); // ray climbs hSurf → 1
-        const sUV = hitUV.toVar();
-        const rayH = hSurf.toVar();
-        Loop({ start: 0, end: sSteps, type: 'int' }, () => {
-          sUV.addAssign(lStepUV);
-          rayH.addAssign(hStep);
-          shadow.assign(max(shadow, float(1).sub(depthAt(sUV)).sub(rayH).max(float(0))));
-        });
-        // strength × POM distance-fade × only when the sun is above the surface
-        shadow.assign(shadow.mul(float(opts.shadowStrength ?? 5)).mul(fade).mul(Lts.z.smoothstep(0.0, 0.25)).clamp(0, 1));
-      }
-      return vec3(hitUV, shadow);
-    })().toVar();
-    pUV = marchRes.xy;
-    selfShadow = marchRes.z;
+    // relief depth: per-material push × ground/rock blend × distance fade, gated by
+    // rockness (temperate grass stays flat; desert gravel parallaxes the whole floor).
+    const viewDist = positionView.z.negate();
+    const fade = viewDist.smoothstep(float(fadeNear), float(fadeFar)).oneMinus();
+    const groundDScale = float(opts.groundDepthScale ?? 1);
+    const depthScale = opts.groundParallax ? mix(groundDScale, rockDScale, w) : rockDScale;
+    const depthNode = spomDepth.mul(depthScale).mul(fade).mul(opts.groundParallax ? float(1) : w);
+
+    const pom = parallaxOcclusionUV(null, {
+      uvNode: rockUv,
+      scale: depthNode,
+      minLayers, maxLayers,
+      minViewZ: 0.12,
+      silhouette: false,   // terrain tiles — no side to carve a silhouette against
+      height: heightAt,
+    });
+    pUV = pom.uv;
+
+    if (opts.sunDir) {
+      // sun direction in VIEW space (towards the sun); the module marches from the
+      // hit point toward it in tangent space and returns a soft, proximity-weighted
+      // lit factor (1 lit → 0 in relief shadow), fading out far away as depth → 0.
+      const Lview = cameraViewMatrix.mul(vec4(opts.sunDir, 0)).xyz;
+      litNode = pom.shadow(Lview, { steps: 12, strength: opts.shadowStrength ?? 8, bias: 0.03 });
+    }
   }
 
   // ---- blended samples at the marched UV, gradient-correct -----------------
@@ -295,7 +264,8 @@ export function buildTerrainMaterial(opts) {
     : vec4(0.2, 0.35, 0.15, 1);
   const baseCol = mix(grassCol, vec4(rockCol.rgb.mul(macro), 1), w);
   // POM self-shadow darkens the relief where the sun is occluded (down to ~30%).
-  mat.colorNode = vec4(baseCol.rgb.mul(selfShadow.mul(0.7).oneMinus()), baseCol.a);
+  // litNode is 1 fully lit → 0 in relief shadow, so 0.3..1.0 keeps ambient fill.
+  mat.colorNode = vec4(baseCol.rgb.mul(litNode.mul(0.7).add(0.3)), baseCol.a);
 
   if (grassNormal) {
     const gN = opts.groundParallax ? texture(grassNormal, gUv).grad(gX, gY) : texture(grassNormal, gUv);
