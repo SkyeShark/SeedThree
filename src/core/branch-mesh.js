@@ -107,6 +107,7 @@ export function buildBranchGeometry(stems, opts = {}) {
     // it on thick stems), so no vertical stretch anywhere.
     const tileV = Math.max(0.02, circumference / uScale);
     let vAlong = 0;
+    let lastWind = 0.05;
     for (let i = 0; i < rings; i++) {
       if (i > 0) vAlong += points[i].distanceTo(points[i - 1]);
       const v = vAlong / tileV;
@@ -120,6 +121,7 @@ export function buildBranchGeometry(stems, opts = {}) {
       const wind = stemWinds
         ? stemWinds[i]
         : Math.min(1, 0.15 + 0.85 * (0.5 * levelFrac + 0.5 * levelFrac * alongFrac + 0.15 * alongFrac));
+      lastWind = wind;
 
       for (let j = 0; j <= seg; j++) {
         const theta = (j / seg) * Math.PI * 2;
@@ -149,7 +151,29 @@ export function buildBranchGeometry(stems, opts = {}) {
         indices.push(a, c, b, b, c, d);
       }
     }
-    vertBase += rings * ringVerts;
+
+    // Tip cap: seal the terminal ring when it ends at a real radius (editable
+    // taper < 1, or a level that doesn't close to a point). Default trees taper
+    // to ~0.002 so the threshold skips them and no cap tris are spent. A single
+    // centre vertex + a triangle fan, normal along the outward tangent.
+    let extraVerts = 0;
+    const tipR = radii[rings - 1];
+    if (tipR > 0.012) {
+      const tp = points[rings - 1];
+      tangentAt(points, rings - 1, tan); // outward tip normal
+      const centerIdx = vertBase + rings * ringVerts;
+      positions.push(tp.x, tp.y, tp.z);
+      normals.push(tan.x, tan.y, tan.z);
+      uvs.push(0.5 * uScale, vAlong / tileV);
+      winds.push(lastWind);
+      centers.push(tp.x, tp.y, tp.z);
+      const ringStart = vertBase + (rings - 1) * ringVerts;
+      // wind CCW so the fan faces along +tangent (matches the tube's outward faces)
+      for (let j = 0; j < seg; j++) indices.push(ringStart + j + 1, centerIdx, ringStart + j);
+      extraVerts = 1;
+    }
+
+    vertBase += rings * ringVerts + extraVerts;
   }
 
   const geo = new BufferGeometry();
