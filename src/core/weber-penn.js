@@ -56,6 +56,12 @@ const DEFAULTS = {
   lobes: 0, lobeDepth: 0,      // ribbed cross-section (cacti)
   attractionUp: 0.5,           // vertical tropism strength
   attractionUpMinLevel: 2,     // lowest level tropism applies to (1 = forks curl up)
+  // ez-tree-style arbitrary growth force: bends every section toward `forceDir`
+  // (world vector) with a per-section step of forceStrength/radius, so heavy limbs
+  // resist and thin twigs comply. `attractionUp` stays the dedicated vertical case;
+  // this is the general tropism (default strength 0 = no-op, existing trees unchanged).
+  forceDir: { x: 0, y: 1, z: 0 },
+  forceStrength: 0,
   baseSplits: 0,               // extra trunks from the base (decurrent multi-leader)
   baseSplitAngle: 20,
   forkChance: 0.82,            // dichotomous-fork frequency (tipCluster species)
@@ -71,6 +77,8 @@ const DEFAULTS = {
   downAngleV:[0, 20, 20, 20],
   rotate:    [0, 140, 140, 140], // ~golden-angle phyllotaxy
   rotateV:   [0, 20, 20, 20],
+  twist:     [0, 0, 0, 0],       // axial roll (radians) accumulated per section, per level
+
   branches:  [0, 30, 12, 0],    // children spawned by a stem at [level]
   // 0 = children distributed along the parent (broadleaf); 1 = children spawn
   // in the parent's last ~10% — dichotomous Y-forks (yucca, dragon tree).
@@ -152,6 +160,15 @@ function buildStem({ level, origin, orient, length, radius, p, rng, stems, tips 
     if (level >= (p.attractionUpMinLevel ?? 2) && p.attractionUp !== 0) {
       applyTropism(o, p.attractionUp / curveRes);
     }
+
+    // Axial twist (ez-tree parity): roll the frame about its own tangent each
+    // section — spins child azimuths + bark UVs around the stem without bending it.
+    const twist = p.twist?.[level] ?? 0;
+    if (twist) o.multiply(new Quaternion().setFromAxisAngle(Y, twist));
+
+    // General growth force: bend toward forceDir with a per-section step that
+    // scales inversely with radius (heavy limbs resist). Runs on every level.
+    if (p.forceStrength) applyForce(o, p.forceDir, p.forceStrength, radius * (1 - uTaper * (i / curveRes)));
 
     const fwd = Y.clone().applyQuaternion(o).normalize();
     pos.addScaledVector(fwd, segLen);
@@ -325,6 +342,24 @@ function childCount(level, childLevel, p, rng) {
   }
   if (level === 0) return Math.round(base);
   return Math.max(1, Math.round(base * 0.6));
+}
+
+// Bend a section's growth toward an arbitrary world direction (ez-tree force).
+// The rotation axis is (fwd × target), so when fwd already points at target the
+// step is zero (no degenerate drift); the step is clamped to the remaining angle.
+function applyForce(o, dir, strength, radius) {
+  const target = new Vector3(dir.x, dir.y, dir.z);
+  if (target.lengthSq() < 1e-9) return;
+  target.normalize();
+  const fwd = Y.clone().applyQuaternion(o);
+  const axis = new Vector3().crossVectors(fwd, target);
+  const sinFull = axis.length();
+  if (sinFull < 1e-6) return;
+  axis.divideScalar(sinFull);
+  const fullAngle = Math.atan2(sinFull, fwd.dot(target));
+  const step = strength / Math.max(radius, 0.05);
+  const clamped = Math.max(-fullAngle, Math.min(fullAngle, step));
+  o.premultiply(new Quaternion().setFromAxisAngle(axis, clamped));
 }
 
 // Rotate an orientation quaternion slightly toward world-up (or down if negative).

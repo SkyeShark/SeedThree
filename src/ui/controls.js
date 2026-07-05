@@ -18,9 +18,34 @@ export const CROWN_SHAPES = {
 // different sliders mapped to that species' own params — no shared oak
 // vocabulary clobbering another species' branching.
 
+// ez-tree-parity ADVANCED per-level Weber-Penn dials: one slider per level for
+// each of these params, mapped straight onto species.params arrays. Only shown
+// for the broadleaf/conifer path (rosette/dichotomous species have their own
+// vocabulary + generator). `trunk` = whether index 0 (the trunk) gets a dial.
+export const ADVANCED_LEVEL_PARAMS = [
+  { key: 'downAngle',      name: 'Down angle',  min: 0,    max: 135, step: 1,    trunk: false, dflt: 0 },
+  { key: 'branches',       name: 'Children',    min: 0,    max: 60,  step: 1,    trunk: false, dflt: 0 },
+  { key: 'curveV',         name: 'Gnarliness',  min: 0,    max: 120, step: 1,    trunk: true,  dflt: 40 },
+  { key: 'curve',          name: 'Curve',       min: -90,  max: 90,  step: 1,    trunk: true,  dflt: 0 },
+  { key: 'length',         name: 'Length ×', min: 0.02, max: 1.5, step: 0.01, trunk: false, dflt: 0.4 },
+  { key: 'taper',          name: 'Taper',       min: 0,    max: 1,   step: 0.01, trunk: true,  dflt: 1 },
+  { key: 'twist',          name: 'Twist',       min: -0.5, max: 0.5, step: 0.01, trunk: true,  dflt: 0 },
+  { key: 'curveRes',       name: 'Sections',    min: 2,    max: 20,  step: 1,    trunk: true,  dflt: 8 },
+  { key: 'radialSegments', name: 'Segments',    min: 3,    max: 16,  step: 1,    trunk: true,  dflt: 6 },
+];
+
 // Default friendly-control values, read from the active species' schema.
 export function controlsFromSpecies(species) {
-  const c = { seed: 1, showLeaves: true, tileWorldSize: species.tileWorldSize ?? 1.5 };
+  const c = {
+    seed: 1, showLeaves: true, tileWorldSize: species.tileWorldSize ?? 1.5,
+    // ez-tree parity: raw per-level param overrides ({ paramKey: { level: value } })
+    // + a general growth-force tropism (strength 0 = off, tree unchanged).
+    paramOverrides: {},
+    forceDirX: species.params?.forceDir?.x ?? 0,
+    forceDirY: species.params?.forceDir?.y ?? 1,
+    forceDirZ: species.params?.forceDir?.z ?? 0,
+    forceStrength: species.params?.forceStrength ?? 0,
+  };
   for (const d of species.controls ?? []) c[d.key] = d.get(species);
   return c;
 }
@@ -34,6 +59,26 @@ export function applySpeciesControls(species, c) {
     tileWorldSize: c.tileWorldSize ?? species.tileWorldSize,
   };
   for (const d of species.controls ?? []) if (d.key in c) d.set(s, c[d.key]);
+  // Advanced per-level overrides: write straight into the params arrays. Seed a
+  // full 4-length array (shallow param merge in the generator REPLACES arrays, so
+  // sparse holes would clobber the DEFAULTS) — missing slots keep the species value
+  // or the advanced default.
+  if (c.paramOverrides) {
+    for (const [key, perLevel] of Object.entries(c.paramOverrides)) {
+      if (!perLevel || !Object.keys(perLevel).length) continue;
+      const cur = Array.isArray(s.params[key]) ? s.params[key] : [];
+      const meta = ADVANCED_LEVEL_PARAMS.find((m) => m.key === key);
+      const arr = [];
+      for (let i = 0; i < 4; i++) arr[i] = cur[i] !== undefined ? cur[i] : (meta ? meta.dflt : 0);
+      for (const [lvl, v] of Object.entries(perLevel)) arr[+lvl] = v;
+      s.params[key] = arr;
+    }
+  }
+  // General growth force (ez-tree tropism vector).
+  if (c.forceStrength) {
+    s.params.forceDir = { x: c.forceDirX ?? 0, y: c.forceDirY ?? 1, z: c.forceDirZ ?? 0 };
+    s.params.forceStrength = c.forceStrength;
+  }
   if (c.showLeaves === false) s.foliage = false;
   return s;
 }
@@ -44,7 +89,7 @@ export function applySpeciesControls(species, c) {
  *   stats: { species, seed, stems, leaves, triangles } — updated via returned api
  */
 export function buildGUI(opts) {
-  const { speciesMap, state, sunState, envState, optState, windState, onChange, onRandomize, onExport, onSun, onScaleRef, onFog, onWind, onForest, onSpom, onOpt } = opts;
+  const { speciesMap, state, sunState, envState, optState, windState, camState, onChange, onRandomize, onExport, onExportPNG, onSun, onScaleRef, onFog, onWind, onForest, onSpom, onOpt, onCamera } = opts;
   const gui = new GUI({ title: '' });
 
   // Branding header (Codex-generated logo + wordmark; falls back to plain text
@@ -69,6 +114,7 @@ export function buildGUI(opts) {
     Object.assign(proxy, state.controls);
     proxy.species = speciesMap[key].name;
     buildParamControls(); // rebuild sliders for this species' branching type
+    buildAdvancedControls();
   });
 
   gui.add(proxy, 'seed', 1, 9999, 1).name('Seed').onChange((v) => { state.controls.seed = v; onChange(); }).listen();
@@ -90,6 +136,36 @@ export function buildGUI(opts) {
     shape.add(proxy, 'tileWorldSize', 0.6, 3.0, 0.05).name('Bark tiling (m)').onChange((v) => { state.controls.tileWorldSize = v; onChange(); });
   }
   buildParamControls();
+
+  // Advanced: raw per-level Weber-Penn dials (ez-tree parity). Hidden for the
+  // rosette/dichotomous species — those params don't drive their generator.
+  const advanced = gui.addFolder('Advanced: branch levels');
+  function buildAdvancedControls() {
+    advanced.controllers.slice().forEach((ct) => ct.destroy());
+    const sp = speciesMap[state.speciesKey];
+    const isRosette = sp.foliageType === 'rosette';
+    advanced.domElement.style.display = isRosette ? 'none' : '';
+    if (isRosette) return;
+    const levels = sp.params?.levels ?? 3;
+    const po = (state.controls.paramOverrides ||= {});
+    for (const m of ADVANCED_LEVEL_PARAMS) {
+      const lo = m.trunk ? 0 : 1;
+      for (let lvl = lo; lvl <= levels - 1; lvl++) {
+        const pk = `adv__${m.key}__${lvl}`;
+        proxy[pk] = (po[m.key]?.[lvl]) ?? sp.params?.[m.key]?.[lvl] ?? m.dflt;
+        advanced.add(proxy, pk, m.min, m.max, m.step)
+          .name(`${m.name} · L${lvl}`)
+          .onChange((v) => { (po[m.key] ||= {})[lvl] = v; onChange(); });
+      }
+    }
+    // General growth force (arbitrary tropism vector).
+    for (const axis of ['X', 'Y', 'Z']) {
+      const pk = `forceDir${axis}`;
+      advanced.add(proxy, pk, -1, 1, 0.01).name(`Force dir ${axis}`).onChange((v) => { state.controls[pk] = v; onChange(); });
+    }
+    advanced.add(proxy, 'forceStrength', 0, 0.12, 0.001).name('Force strength').onChange((v) => { state.controls.forceStrength = v; onChange(); });
+  }
+  buildAdvancedControls();
 
   // Optimization: LOD chain preview + switch distances + billboard bake options.
   if (optState && onOpt) {
@@ -136,7 +212,15 @@ export function buildGUI(opts) {
     }
   }
 
+  // Camera: orbit auto-rotate (ez-tree parity).
+  if (camState && onCamera) {
+    const cam = gui.addFolder('Camera');
+    cam.add(camState, 'autoRotate').name('Auto-rotate').onChange(() => onCamera());
+    cam.add(camState, 'autoRotateSpeed', 0, 4, 0.1).name('Rotate speed').onChange(() => onCamera());
+  }
+
   gui.add({ export: () => onExport() }, 'export').name('⬇ Download .glb');
+  if (onExportPNG) gui.add({ png: () => onExportPNG() }, 'png').name('📷 Export PNG');
 
   // Sections start collapsed — the panel opens as a tidy list of headings.
   gui.foldersRecursive().forEach((f) => f.close());

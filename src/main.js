@@ -217,6 +217,9 @@ async function main() {
   controls.target.set(0, 8.5, 0);
   controls.maxDistance = 300; // = the billboard-distance slider's max: you can
   controls.minDistance = 2;   // always zoom far enough to see the last LOD, no further
+  // Orbit auto-rotate (ez-tree parity) — the anim loop already calls controls.update().
+  const camState = { autoRotate: false, autoRotateSpeed: 1.0 };
+  const applyCamera = () => { controls.autoRotate = camState.autoRotate; controls.autoRotateSpeed = camState.autoRotateSpeed; };
 
   const sunState = { az: 40, el: 32 }; // late-afternoon default — warmer light, longer shadows
   const sunDirWorld = () => {
@@ -1009,6 +1012,8 @@ async function main() {
     sunState,
     envState,
     optState,
+    camState,
+    onCamera: () => applyCamera(),
     onOpt,
     onSun: () => updateSun(),
     onScaleRef: (v) => { scaleRef.visible = v; },
@@ -1043,6 +1048,21 @@ async function main() {
       state.controls.seed = 1 + Math.floor(Math.random() * 9998);
       syncFromState();
       requestRebuild();
+    },
+    // PNG snapshot (ez-tree parity): render a fresh frame and grab the WebGPU
+    // canvas in the same task (the drawing buffer isn't preserved after present).
+    onExportPNG: async () => {
+      try {
+        await renderer.renderAsync(scene, camera);
+        const bmp = await createImageBitmap(renderer.domElement);
+        const oc = new OffscreenCanvas(bmp.width, bmp.height);
+        oc.getContext('2d').drawImage(bmp, 0, 0);
+        const blob = await oc.convertToBlob({ type: 'image/png' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `${SPECIES[state.speciesKey].name.replace(/\s+/g, '_')}_seed${state.controls.seed}.png`;
+        document.body.appendChild(a); a.click(); a.remove();
+      } catch (e) { console.error('PNG export failed:', e); }
     },
     onExport: async () => {
       if (!currentTree) return;
