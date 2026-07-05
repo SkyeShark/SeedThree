@@ -81,6 +81,10 @@ export function applySpeciesControls(species, c) {
   };
   for (const d of species.controls ?? []) if (d.key in c) d.set(s, c[d.key]);
   for (const d of species.advancedControls ?? []) if (d.key in c) d.set(s, c[d.key]); // L-system Advanced dials
+  // Bark tiling: temperate reads s.tileWorldSize (above), but the dichotomous
+  // generator reads params.tileWorldSize — mirror the slider into both so the
+  // "Bark tiling" dial actually retiles rosette/cactus bark.
+  if (c.tileWorldSize !== undefined) s.params.tileWorldSize = c.tileWorldSize;
   // Advanced per-level overrides: write straight into the params arrays. Seed a
   // full 4-length array (shallow param merge in the generator REPLACES arrays, so
   // sparse holes would clobber the DEFAULTS) — missing slots keep the species value

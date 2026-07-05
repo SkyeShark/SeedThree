@@ -13,6 +13,7 @@ export const joshuaTree = {
   tileWorldSize: 0.8,
   plantSink: 0.15,
   foliageType: 'rosette',
+  tileWorldSize: 0.8, // seeds the Bark-tiling dial; wired to params.tileWorldSize
   // Controls mapped to the DICHOTOMOUS params (not oak params).
   controls: [
     { key: 'trunkHeight', name: 'Trunk height (m)', min: 0.8, max: 4, step: 0.1, get: (s) => s.params.firstForkHeight, set: (s, v) => { s.params.firstForkHeight = v; } },
@@ -37,7 +38,6 @@ export const joshuaTree = {
     { key: 'forkBaseScale', name: 'Arm base neck', min: 0.4, max: 1.2, step: 0.02, get: (s) => s.params.forkBaseScale ?? 1.0, set: (s, v) => { s.params.forkBaseScale = v; } },
     { key: 'branchRepel', name: 'Branch repel', min: 0, max: 1.5, step: 0.05, get: (s) => s.params.branchRepel ?? 0.7, set: (s, v) => { s.params.branchRepel = v; } },
     { key: 'trunkFlare', name: 'Trunk base flare', min: 1, max: 3, step: 0.05, get: (s) => s.params.trunkFlare ?? 1.7, set: (s, v) => { s.params.trunkFlare = v; } },
-    { key: 'trunkPinch', name: 'Trunk base pinch', min: 0, max: 0.4, step: 0.02, get: (s) => s.params.trunkPinch ?? 0, set: (s, v) => { s.params.trunkPinch = v; } },
     { key: 'trunkSegRes', name: 'Trunk ring detail', min: 3, max: 16, step: 1, get: (s) => s.params.trunkSegRes ?? 9, set: (s, v) => { s.params.trunkSegRes = Math.round(v); } },
     { key: 'trunkSplayDeg', name: 'Multi-trunk splay (°)', min: 0, max: 40, step: 1, get: (s) => s.params.trunkSplayDeg ?? 14, set: (s, v) => { s.params.trunkSplayDeg = v; } },
   ],

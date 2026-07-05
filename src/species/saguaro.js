@@ -18,6 +18,7 @@ export const saguaro = {
   plantSink: 0.1,
   foliageType: 'rosette', // uses the dichotomous path; foliage is spines, not a rosette
   cactus: true,           // → fluted mesh + cactus-flesh material + spines (not bark/rosette)
+  tileWorldSize: 0.8,     // seeds the Bark-tiling dial; wired to params.tileWorldSize
   controls: [
     { key: 'trunkHeight', name: 'Column growth (m/seg)', min: 0.7, max: 2.2, step: 0.1, get: (s) => s.params.firstForkHeight, set: (s, v) => { s.params.firstForkHeight = v; } },
     { key: 'armLength', name: 'Arm length (m)', min: 0.6, max: 2, step: 0.1, get: (s) => s.params.armLength, set: (s, v) => { s.params.armLength = v; } },
@@ -42,7 +43,6 @@ export const saguaro = {
     { key: 'forkRadiusKeep', name: 'Arm thickness keep', min: 0.5, max: 1, step: 0.02, get: (s) => s.params.forkRadiusKeep ?? 0.72, set: (s, v) => { s.params.forkRadiusKeep = v; } },
     { key: 'forkBaseScale', name: 'Arm base neck', min: 0.4, max: 1.2, step: 0.02, get: (s) => s.params.forkBaseScale ?? 0.58, set: (s, v) => { s.params.forkBaseScale = v; } },
     { key: 'branchRepel', name: 'Branch repel', min: 0, max: 1.5, step: 0.05, get: (s) => s.params.branchRepel ?? 0.6, set: (s, v) => { s.params.branchRepel = v; } },
-    { key: 'trunkPinch', name: 'Base pinch', min: 0, max: 0.4, step: 0.02, get: (s) => s.params.trunkPinch ?? 0.12, set: (s, v) => { s.params.trunkPinch = v; } },
     { key: 'trunkSegRes', name: 'Column ring detail', min: 3, max: 16, step: 1, get: (s) => s.params.trunkSegRes ?? 9, set: (s, v) => { s.params.trunkSegRes = Math.round(v); } },
   ],
   foliage: false, // spines are built separately (cactus path); no rosette
