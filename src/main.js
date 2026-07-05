@@ -655,7 +655,8 @@ async function main() {
       // WebGPU doesn't recompile pipelines (the per-edit freeze). Species switch
       // or non-rosette species → fresh build + disposeTree as before.
       const reuse = (currentTree && species.foliageType === 'rosette'
-        && currentTree.userData?.species === species.name) ? currentTree : null;
+        && currentTree.userData?.species === species.name
+        && currentTree.userData?.mobileBuilt === optState.mobileTarget) ? currentTree : null; // toggling mobile changes LOD distances → fresh build
       const { group } = buildTree(shaped, state.controls.seed, assets, {
         lod1Dist: optState.lod1Dist, lod2Dist: optState.lod2Dist, meshQuality: optState.meshQuality,
         lod1Pct: optState.lod1Pct, lod2Pct: optState.lod2Pct,

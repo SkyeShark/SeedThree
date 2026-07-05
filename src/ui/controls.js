@@ -154,8 +154,8 @@ export function buildGUI(opts) {
     const sp = speciesMap[state.speciesKey];
     const isRosette = sp?.foliageType === 'rosette';
     const isCactus = isRosette && !!sp?.cactus;   // saguaro: spines, fluted ribs
-    cMobile.show(!isRosette);                      // (mobile hybrid for rosettes lands next)
-    const m = !!optState?.mobileTarget && !isRosette;
+    cMobile.show(true);                            // mobile target now works on rosettes too
+    const m = !!optState?.mobileTarget;           // mobile ladder (temperate cards OR rosette lighter-cone near)
     // ROSETTE path (Joshua/yucca/saguaro): budget% and prune don't apply (no branch
     // cards / no twig skeleton to prune), so hide them; density → rosette/spine
     // density, quality → cone/rib detail. Temperate path keeps its card/budget dials.

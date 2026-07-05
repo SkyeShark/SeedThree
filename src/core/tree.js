@@ -53,6 +53,27 @@ function buildDichotomousTree(species, seed, assets, lodOpts, reuse = null) {
     levels[2].radialSegs = Math.max(14, rc); levels[2].ribDepth = 0; levels[2].spineDensity = 0; // ribs gone at range → no spines
   }
 
+  // MOBILE PERFORMANCE TARGET: park the full-detail cone levels (LOD0/LOD1 stay built
+  // as the billboard-bake source + what the dials edit, but never render) and promote
+  // a lighter "mobile near" LOD2 — MEDIUM cone/rib detail + a fuller bottom-up-thinned
+  // skirt — to the near view, then the billboard. Far fewer tris up close while still
+  // reading as the plant. applyLodMobile() parks the hiddenInApp levels + sets LOD2→
+  // near (distance 0) and BB→billboardDist. (The forest instances are already
+  // billboards, so the hero's cone draw-calls are the only near cost — acceptable.)
+  if (lodOpts.mobileTarget) {
+    levels[0].hiddenInApp = true;
+    levels[1].hiddenInApp = true;
+    if (species.cactus) {
+      levels[2].radialSegs = (species.params.ribCount ?? 16) * 2;
+      levels[2].ribDepth = species.params.ribDepth * 0.85;
+      levels[2].spineDensity = 0.5 * d2; // keep ribs + spines on the near mobile column
+    } else {
+      levels[2].radialSegs = 6;
+      levels[2].coneRadialSegs = cs(7);   // medium cones (not the desktop-far coarsest)
+      levels[2].rosetteDensity = 0.7 * d2; // fuller skirt/rosettes than desktop LOD2
+    }
+  }
+
   // REUSE: when the SAME rosette species is already on screen, we rewrite the
   // existing meshes' buffers IN PLACE (same LOD, same level Groups, same bark
   // geometry object, same per-cone InstancedMeshes) instead of building new
@@ -64,6 +85,7 @@ function buildDichotomousTree(species, seed, assets, lodOpts, reuse = null) {
   for (const [i, lv] of levels.entries()) {
     const level = reuse ? reuse.levels[i].object : new Group();
     if (!reuse) { level.name = `${speciesSlug}_${lv.name}`; level.userData.lodName = lv.name; }
+    level.userData.hiddenInApp = !!lv.hiddenInApp; // mobile: parked by applyLodMobile (set even on reuse so toggling works)
 
     // Bark cylinders — rewrite the existing geometry's attributes in place on
     // reuse (keeps the Mesh + geometry identity → no recompile), else build fresh
@@ -111,6 +133,7 @@ function buildDichotomousTree(species, seed, assets, lodOpts, reuse = null) {
   lod.position.y = -(species.plantSink ?? 0.2);
   lod.userData = {
     species: species.name, seed,
+    mobileBuilt: !!lodOpts.mobileTarget, // reuse only when the mobile state matches (LOD distances differ)
     stemCount: stems.length, tipCount: terminalStems.length,
     leafInstances: stats[0].leafInstances, levels: stats,
     stems, // retained for debug/inspection (skirt framing checks)
