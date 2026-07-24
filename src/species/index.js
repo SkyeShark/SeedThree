@@ -9,6 +9,8 @@ import { saguaro } from './saguaro.js';
 import { pine } from './pine.js';
 import { loblolly } from './loblolly.js';
 import { douglasFir } from './douglas-fir.js';
+import { apple } from './apple.js';
+import { cherry } from './cherry.js';
 
 export const SPECIES = {
   whiteOak,
@@ -19,6 +21,8 @@ export const SPECIES = {
   pine,
   loblolly,
   douglasFir,
+  apple,
+  cherry,
   joshuaTree,
   saguaro,
 };
