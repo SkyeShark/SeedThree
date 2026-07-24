@@ -5,6 +5,9 @@ tmp/
 .DS_Store
 # Codex drops generated images here by default before we move them into assets/
 .codex-tmp/
+# Pipeline intermediates — final keyed assets are committed without _raw.
+assets/leaves/*_raw.png
+assets/leaves/sources/
 
 # dev scratch / experiments — not part of the release
 work_tmp/
