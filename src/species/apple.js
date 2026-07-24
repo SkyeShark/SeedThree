@@ -6,7 +6,7 @@ import { broadleafControls } from './broadleaf-controls.js';
 export const apple = {
   name: 'Cultivated Apple',
   latin: 'Malus domestica',
-  bark: 'white_oak_albedo.png',
+  bark: 'apple_bark_albedo.png',
   leaf: 'american_beech_single_albedo.png',
   biome: 'temperate',
   controls: broadleafControls,
