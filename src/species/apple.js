@@ -9,7 +9,6 @@ export const apple = {
   bark: 'white_oak_albedo.png',
   leaf: 'american_beech_single_albedo.png',
   biome: 'temperate',
-  tileWorldSize: 0.62,
   controls: broadleafControls,
   foliage: {
     mode: 'leaves',

@@ -9,7 +9,6 @@ export const cherry = {
   bark: 'red_maple_albedo.png',
   leaf: 'red_maple_single_albedo.png',
   biome: 'temperate',
-  tileWorldSize: 0.72,
   controls: broadleafControls,
   foliage: {
     mode: 'leaves',
