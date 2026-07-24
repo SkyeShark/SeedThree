@@ -25,7 +25,7 @@
 //               that away.
 
 import { Vector3 } from 'three/webgpu';
-import { uniform, time, sin, mix, normalize, positionLocal, positionWorld, positionGeometry, attribute, float, vec3, vec4, modelWorldMatrix } from 'three/tsl';
+import { uniform, time, sin, mix, normalize, positionLocal, positionWorld, positionGeometry, attribute, float, vec3, vec4, modelWorldMatrix, uv } from 'three/tsl';
 
 export const windStrength = uniform(0.5); // 0..1 (GUI)
 export const windSpeed = uniform(1.0);    // gust tempo multiplier (GUI)
@@ -166,4 +166,20 @@ export function grassWindPosition(bladeHeight = 1) {
   const jitterT = time.mul(windSpeed).mul(3.1).add(positionWorld.z.mul(1.7)).add(positionWorld.x.mul(1.3));
   const jitter = sin(jitterT).mul(amp).mul(0.25);
   return positionLocal.add(windDir.mul(gust.add(jitter)).mul(k));
+}
+
+// Instanced ground-cover cards: pinned at the root like grass, but with
+// per-instance phase and a pre-transformed wind vector. This keeps wide,
+// rotated clumps such as reeds welded together while their tips sway in one
+// world-space direction. Builders provide aAnchorPos and aWindVec.
+export function groundCoverWindPosition(amount = 0.16) {
+  const k = uv().y.mul(uv().y);
+  const amp = windStrength.mul(amount);
+  const anchorWorld = modelWorldMatrix.mul(vec4(attribute('aAnchorPos', 'vec3'), 1)).xyz;
+  const gust = swayAt(anchorWorld, 2).mul(amp);
+  const jitterT = time.mul(windSpeed).mul(3)
+    .add(anchorWorld.z.mul(1.7))
+    .add(anchorWorld.x.mul(1.3));
+  const jitter = sin(jitterT).mul(amp).mul(0.18);
+  return positionLocal.add(attribute('aWindVec', 'vec3').mul(gust.add(jitter).mul(k)));
 }

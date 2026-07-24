@@ -12,6 +12,7 @@ import { serializeSource } from './core/bake-transfer.js';
 import { bakeBranchCards, disposeBranchCards, forestCardMaterial } from './core/branch-cards.js';
 import { buildRocks } from './core/rocks.js';
 import { buildGrass } from './core/grass.js';
+import { buildWildflowers } from './core/wildflowers.js';
 import { buildScrub } from './core/scrub.js';
 import { windStrength, windSpeed, sunDirectionUniform, WIND_DIR } from './core/wind.js';
 import { Rng } from './core/rng.js';
@@ -486,6 +487,7 @@ async function main() {
       ]);
       const grass = buildGrass({ tuftTexture, tuftNormal, tuftRoughness, sampler, seed: state.controls.seed, flatRadius: 15 });
       if (grass) group.add(grass);
+      group.add(buildWildflowers({ sampler, seed: state.controls.seed, flatRadius: 15 }));
     } else {
       // Desert scrub in place of grass: sagebrush / blackbrush / creosote alpha
       // cards (skipped gracefully until Codex paints them).
