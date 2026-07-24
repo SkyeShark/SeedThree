@@ -1,0 +1,53 @@
+// Cultivated apple (Malus domestica) — low, broad orchard form with a forked,
+// irregular scaffold crown and dense short fruiting twigs.
+
+import { broadleafControls } from './broadleaf-controls.js';
+
+export const apple = {
+  name: 'Cultivated Apple',
+  latin: 'Malus domestica',
+  bark: 'apple_bark_albedo.png',
+  leaf: 'american_beech_single_albedo.png',
+  biome: 'temperate',
+  controls: broadleafControls,
+  foliage: {
+    mode: 'leaves',
+    clustersPerBranch: 3,
+    clusterSize: 0.72,
+    clusterSizeVar: 0.18,
+    clusterQuads: 2,
+    tint: 0xc8dda5,
+    leavesPerBranch: 9,
+    size: 0.24,
+    downAngle: 54,
+    bend: 0,
+    trunkClearRadius: 0.25,
+  },
+  params: {
+    scale: 4.45,
+    scaleV: 0.42,
+    levels: 3,
+    ratio: 0.048,
+    ratioPower: 1.25,
+    baseSize: 0.31,
+    shape: 1,
+    flare: 0.72,
+    attractionUp: 0.38,
+    baseSplits: 1,
+    baseSplitAngle: 16,
+    //          trunk L1    L2    L3
+    length:    [1,    0.54, 0.38, 0.22],
+    lengthV:   [0,    0.16, 0.14, 0.1],
+    taper:     [1,    1,    1,    1],
+    curveRes:  [8,    5,    4,    3],
+    curve:     [9,    30,   28,   0],
+    curveBack: [0,   -18,   0,    0],
+    curveV:    [14,   58,   58,   48],
+    downAngle: [0,    68,   56,   52],
+    downAngleV:[0,    20,   22,   22],
+    rotate:    [0,    137,  137,  137],
+    rotateV:   [0,    30,   32,   32],
+    branches:  [0,    16,   11,   0],
+    radialSegments: [10, 7, 5, 4],
+  },
+};
