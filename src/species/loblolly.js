@@ -16,6 +16,7 @@ export const loblolly = {
   foliage: {
     mode: 'leaves', clustersPerBranch: 3, clusterSize: 1.2, clusterSizeVar: 0.3, clusterQuads: 2,
     tint: 0xccd6b8, leavesPerBranch: 8, size: 0.85, downAngle: 55, bend: 0, startFrac: 0.2, // long needle sprays (bigger cards)
+    cardCrownUnderlay: true, cardCrownUnderlayLateralScale: 1.35,
   },
   params: {
     scale: 30, scaleV: 3, levels: 3, ratio: 0.018, ratioPower: 1.4,

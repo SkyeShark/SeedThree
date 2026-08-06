@@ -13,7 +13,9 @@ export const sweetgum = {
   controls: broadleafControls,
   foliage: {
     mode: 'leaves', clustersPerBranch: 3, clusterSize: 1.25, clusterSizeVar: 0.3, clusterQuads: 2,
-    tint: 0xcfe4ac, leavesPerBranch: 7, size: 0.55, downAngle: 55, bend: 0, // 520 short twigs now → fewer leaves each
+    tint: 0xcfe4ac, leavesPerBranch: 7, cardCoverage: 1.5, cardRadialPlanes: 2,
+    cardCrownUnderlay: true, cardCrownUnderlayLateralScale: 1.28,
+    mobileNearTwigCollapse: true, size: 0.55, downAngle: 55, bend: 0,
     trunkClearRadius: 0.75, // no leaves intersecting the trunk column
   },
   // Real sweetgum (Liquidambar): EXCURRENT — one straight central leader that does NOT

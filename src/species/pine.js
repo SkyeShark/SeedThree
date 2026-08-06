@@ -21,6 +21,7 @@ export const pine = {
     tint: 0xcdd8c0,                   // near-neutral so the blue-green needles read true
     leavesPerBranch: 9, size: 0.7, downAngle: 62, bend: 0,
     startFrac: 0.15,
+    cardCrownUnderlay: true, cardCrownUnderlayLateralScale: 1.35,
   },
   params: {
     scale: 30, scaleV: 3, levels: 3, ratio: 0.02, ratioPower: 1.4,

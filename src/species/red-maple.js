@@ -13,7 +13,9 @@ export const redMaple = {
   controls: broadleafControls,
   foliage: {
     mode: 'leaves', clustersPerBranch: 3, clusterSize: 1.2, clusterSizeVar: 0.3, clusterQuads: 2,
-    tint: 0xdce4b4, leavesPerBranch: 7, size: 0.55, downAngle: 50, bend: 0, // many short twigs now → fewer leaves each
+    tint: 0xdce4b4, leavesPerBranch: 7, cardCoverage: 1.5, cardRadialPlanes: 2,
+    cardCrownUnderlay: true, cardCrownUnderlayLateralScale: 1.3,
+    mobileNearTwigCollapse: true, size: 0.55, downAngle: 50, bend: 0,
     trunkClearRadius: 0.85, // no leaves piling against the lower trunk
   },
   // Real red maple (Acer rubrum): a fairly straight single trunk carrying a dense

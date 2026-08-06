@@ -13,7 +13,9 @@ export const tulipPoplar = {
   controls: broadleafControls,
   foliage: {
     mode: 'leaves', clustersPerBranch: 3, clusterSize: 1.2, clusterSizeVar: 0.3, clusterQuads: 2,
-    tint: 0xcfe8b4, leavesPerBranch: 7, size: 0.6, downAngle: 48, bend: 0, // many short twigs now
+    tint: 0xcfe8b4, leavesPerBranch: 7, cardCoverage: 1.5, cardRadialPlanes: 2,
+    cardCrownUnderlay: true, cardCrownUnderlayLateralScale: 1.28,
+    mobileNearTwigCollapse: true, size: 0.6, downAngle: 48, bend: 0,
     trunkClearRadius: 0.8, // keep leaves off the long clear bole (height-tapered)
   },
   // Real tulip poplar (Liriodendron): VERY tall, straight EXCURRENT trunk that self-

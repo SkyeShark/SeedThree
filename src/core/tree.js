@@ -8,7 +8,7 @@ import { Rng } from './rng.js';
 import { generateSkeleton } from './weber-penn.js';
 import { buildBranchGeometry } from './branch-mesh.js';
 import { buildFoliage } from './leaf-cards.js';
-import { buildCardFoliage } from './branch-cards.js';
+import { buildCardFoliage, planBranchCardCrownUnderlay } from './branch-cards.js';
 import { buildYuccaFoliage } from './yucca-leaves.js';
 import { generateDichotomous, buildMergedMesh } from './dichotomous.js';
 import { buildCactusSpines } from './cactus-spines.js';
@@ -372,7 +372,13 @@ function lodLevels(species, opts = {}) {
   // Near (effective LOD0, dist 0) — reference mobile model. Terminal twigs are
   // 3-sided prisms decimated to ~base+tip (the ≤10k mobile-near budget lives or
   // dies on twig tube tris — they dominate the count).
-  Object.assign(base[2], rung('LOD2', 0, maxL, true, 0.6, 2, 1.0, 0.05),
+  // Dense broadleaves can collapse only their terminal twig tubes into the
+  // already-baked full-content cards. Combined with two radial planes inside
+  // each card instance, this hides pale twig frameworks from every azimuth and
+  // lowers total near-LOD triangles; species without the opt-in retain the
+  // original hybrid skeleton exactly.
+  const collapseNearTwigs = f.mobileNearTwigCollapse === true;
+  Object.assign(base[2], rung('LOD2', 0, maxL, !collapseNearTwigs, 0.6, 2, 1.0, 0.05),
     { appOnly: false, hiddenInApp: false, terminalSides: 3, terminalRingStride: 4 });
   // Density sliders thin the cards. PRUNE IS OFF on the mobile card rungs: the
   // prune sliders are DESKTOP dials (hidden in mobile mode), yet their values
@@ -402,6 +408,11 @@ export function buildTree(species, seed, assets = {}, lodOpts = {}, reuse = null
   const { stems, tips } = generateSkeleton(species.params, rng);
   const maxLevel = stems[0]?.maxLevel ?? 0;
   const terminalStems = stems.filter((s) => s.level === s.maxLevel);
+  const rootStems = stems.filter((s) => s.parentId == null || s.parentId < 0);
+  const crownUnderlayPlan = planBranchCardCrownUnderlay(
+    species.foliage,
+    rootStems.length,
+  );
   const barkMat = assets.barkMat ?? makeBarkMaterial(assets);
 
   const lod = new LOD();
@@ -465,6 +476,8 @@ export function buildTree(species, seed, assets = {}, lodOpts = {}, reuse = null
     // Foliage FIRST — its triangle count feeds the branch budget solver.
     let foliage = null;
     let leafInstances = 0;
+    let crownUnderlayInstances = 0;
+    let crownUnderlayTriangles = 0;
     if (useCards) {
       const frng = new Rng(`${species.name}:${seed}:cards${i}`);
       // Pick the card set baked at THIS level + content. keepTwigs (hybrid) levels
@@ -476,6 +489,35 @@ export function buildTree(species, seed, assets = {}, lodOpts = {}, reuse = null
         ?? lodOpts.branchCards;
       foliage = buildCardFoliage(cardRoots, cardsSet, frng, lv.cards);
       if (foliage) leafInstances = foliage.children.reduce((n, c) => n + c.count, 0);
+      // Dense broadleaves may add one bounded crossed crown layer behind their
+      // detailed cards. It is foliage-only from the intact root subtree, so it
+      // connects lateral/depth gaps without another pale branch framework.
+      const underlaySet = crownUnderlayPlan.enabled
+        ? lodOpts.branchCards.byLevel?.get('0:underlay')
+        : null;
+      if (underlaySet && crownUnderlayPlan.rootCardInstances > 0) {
+        const underlay = buildCardFoliage(
+          rootStems.slice(0, crownUnderlayPlan.rootCardInstances),
+          underlaySet,
+          new Rng(`${species.name}:${seed}:crown-underlay${i}`),
+          {
+            growScale: 1,
+            keepFraction: 1,
+            crossed: true,
+            lateralScale: crownUnderlayPlan.lateralScale,
+          },
+        );
+        if (underlay) {
+          crownUnderlayInstances = underlay.children.reduce((n, c) => n + c.count, 0);
+          crownUnderlayTriangles = underlay.children.reduce(
+            (n, c) => n + geoTris(c.geometry) * c.count,
+            0,
+          );
+          leafInstances += crownUnderlayInstances;
+          if (!foliage) foliage = underlay;
+          else for (const child of [...underlay.children]) foliage.add(child);
+        }
+      }
     } else if (species.foliageType === 'rosette' && species.foliage !== false) {
       if (assets.rosetteMat) {
         const frng = new Rng(`${species.name}:${seed}:foliage${i}`);
@@ -534,7 +576,13 @@ export function buildTree(species, seed, assets = {}, lodOpts = {}, reuse = null
     if (i === 0) total0 = geoTris(geo) + folTris; // budget reference for LOD1+
 
     lod.addLevel(level, lv.distance, 0.05); // 5% hysteresis against boundary flicker
-    levelStats.push({ name: lv.name, distance: lv.distance, leafInstances });
+    levelStats.push({
+      name: lv.name,
+      distance: lv.distance,
+      leafInstances,
+      crownUnderlayInstances,
+      crownUnderlayTriangles,
+    });
   }
 
   // Plant the trunk base (local origin) into the ground. Anchoring at the origin

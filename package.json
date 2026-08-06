@@ -10,7 +10,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview --port 5390"
+    "preview": "vite preview --port 5390",
+    "test:branch-card-coverage": "node scripts/test-branch-card-coverage.mjs"
   },
   "dependencies": {
     "lil-gui": "^0.21.0",
