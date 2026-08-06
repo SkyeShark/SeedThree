@@ -19,6 +19,9 @@ const inPath = process.argv[2];
 if (!inPath) { console.error('usage: derive-height.mjs <normal.png> [out.png]'); process.exit(1); }
 const outPath = process.argv[3] ?? inPath.replace(/_normal\.png$/i, '_height.png');
 if (outPath === inPath) { console.error('output would overwrite input — name it explicitly'); process.exit(1); }
+const cwd = process.cwd() + path.sep;
+if (!path.resolve(inPath).startsWith(cwd)) { console.error('input path must be within the working directory'); process.exit(1); }
+if (!path.resolve(outPath).startsWith(cwd)) { console.error('output path must be within the working directory'); process.exit(1); }
 
 // ---- radix-2 complex FFT (in-place, separable for 2D) ----------------------
 function fft1d(re, im, inverse) {
