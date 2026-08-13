@@ -17,6 +17,7 @@ import { Vector3, Quaternion } from 'three/webgpu';
 const UP = new Vector3(0, 1, 0);
 const X = new Vector3(1, 0, 0);
 const Y = new Vector3(0, 1, 0);
+const Z = new Vector3(0, 0, 1);
 
 function qAround(axis, deg) {
   return new Quaternion().setFromAxisAngle(axis, (deg * Math.PI) / 180);
@@ -62,8 +63,22 @@ const DEFAULTS = {
   // this is the general tropism (default strength 0 = no-op, existing trees unchanged).
   forceDir: { x: 0, y: 1, z: 0 },
   forceStrength: 0,
+  forceMinLevel: 0,             // leave trunk/scaffolds rigid while guiding fine twigs
+  forceLevelScale: null,        // optional per-level multiplier (heavy limbs sag less than fine shoots)
   baseSplits: 0,               // extra trunks from the base (decurrent multi-leader)
   baseSplitAngle: 20,
+  // Optional true low fork: one shared bole reaches trunkForkHeight, then
+  // divides into joined level-0 leaders. Unlike baseSplits this never clones a
+  // complete crown at the soil and the leaders divide the L1 branch quota.
+  trunkForkHeight: null,       // fraction of nominal trunk length; null disables
+  trunkForkCount: 2,
+  trunkForkAngle: 24,          // leader divergence half-angle (degrees)
+  trunkForkAngleV: 6,
+  trunkForkRadiusKeep: 0.72,   // near da Vinci R/sqrt(2)
+  trunkForkBaseTaper: 0.18,    // preserve a substantial radius at the crotch
+  trunkForkFlareScale: 1,
+  decurrentTrunk: false,       // end leaders just beyond their last scaffold
+  decurrentTrunkExtension: 0.018,
   forkChance: 0.82,            // dichotomous-fork frequency (tipCluster species)
   // Per child-level arrays (index = the level being created; [0] = trunk).
   length:    [1.0, 0.45, 0.4, 0.35],
@@ -73,11 +88,38 @@ const DEFAULTS = {
   curve:     [10, 40, 40, 0],
   curveBack: [0, 0, 0, 0],
   curveV:    [40, 60, 60, 60],
+  zigzagAngle:  [0, 0, 0, 0], // alternating lateral heading per section
+  zigzagAngleV: [0, 0, 0, 0],
   downAngle: [0, 60, 50, 45],
   downAngleV:[0, 20, 20, 20],
   rotate:    [0, 140, 140, 140], // ~golden-angle phyllotaxy
   rotateV:   [0, 20, 20, 20],
+  whorlSize:  [1, 1, 1, 1],     // >1 groups children at one node (opposite/whorled branching)
   twist:     [0, 0, 0, 0],       // axial roll (radians) accumulated per section, per level
+  // Optional child-placement profiles. Defaults reproduce the original even
+  // distribution (trunk starts at baseSize; all other parents start at 10%).
+  // distPower < 1 concentrates shoots toward the parent's distal end.
+  branchStart: null,
+  branchEnd: null,
+  branchDistPower: null,
+  downAngleProgress: [0, 0, 0, 0], // degrees added from first to last child node
+  lengthScaleBase: [1, 1, 1, 1],
+  lengthScaleTip: [1, 1, 1, 1],
+  branchJitter: null,
+  branchSpacing: null,
+  branchMin: null,
+  branchMax: null,
+  lengthAbsolute: null,
+  lengthAbsoluteV: null,
+  lengthMin: null,
+  lengthMax: null,
+  terminalFloor: null,
+  terminalFloorV: 0,
+  terminalFloorWave: 0,
+  terminalFloorLobes: 3,
+  terminalFloorMin: null,
+  terminalFloorMax: null,
+
 
   branches:  [0, 30, 12, 0],    // children spawned by a stem at [level]
   // 0 = children distributed along the parent (broadleaf); 1 = children spawn
@@ -107,37 +149,115 @@ export function generateSkeleton(userParams, rng) {
   if ((p.tipCluster?.[1] ?? 0) > 0.5) trunkLen *= 0.45 + 1.1 * (p.baseSize ?? 0.5);
   const trunkRadius = trunkLen * p.ratio;
 
-  const nTrunks = 1 + (p.baseSplits | 0);
-  for (let t = 0; t < nTrunks; t++) {
-    const orient = new Quaternion();
-    if (nTrunks > 1) {
-      // Splay multiple leaders out from the base.
-      const az = (360 / nTrunks) * t + rng.vary(0, 20);
-      orient.multiply(qAround(Y, az));
-      orient.multiply(qAround(X, rng.vary(p.baseSplitAngle, 8)));
-    }
+  const forkHeight = Number.isFinite(p.trunkForkHeight)
+    ? Math.max(0.05, Math.min(0.85, p.trunkForkHeight))
+    : null;
+  const forkCount = Math.max(2, Math.round(p.trunkForkCount ?? 2));
+  const useSharedBole = forkHeight != null && (p.baseSplits | 0) === 0;
+
+  if (useSharedBole) {
+    // Build the shared lower trunk without its ordinary L1 children. Its end
+    // stays open and thick; the leader bases overlap it into one real crotch.
     buildStem({
       level: 0,
       origin: new Vector3(0, 0, 0),
-      orient,
-      length: trunkLen,
+      orient: new Quaternion(),
+      length: trunkLen * forkHeight,
       radius: trunkRadius,
+      taperOverride: p.trunkForkBaseTaper ?? 0.18,
+      curveResOverride: Math.max(2, Math.round((p.curveRes?.[0] ?? 10) * forkHeight)),
+      curveScale: forkHeight,
+      suppressChildren: true,
+      openTip: true,
+      role: 'sharedBole',
       p, rng, stems, tips,
     });
+    const base = stems[0];
+    const forkOrigin = base.points.at(-1).clone();
+    const forkOrient = base.orients.at(-1).clone();
+    const forkRadius = base.radii.at(-1);
+    const forkWind = base.winds.at(-1);
+    const forkPlaneAz = rng.range(0, 360);
+    const totalPrimary = Math.max(0, Math.round(p.branches?.[1] ?? 0));
+    const quotaBase = Math.floor(totalPrimary / forkCount);
+    const quotaExtra = totalPrimary % forkCount;
+
+    for (let t = 0; t < forkCount; t++) {
+      const angle = Math.max(1, rng.vary(p.trunkForkAngle ?? 24, p.trunkForkAngleV ?? 6));
+      const orient = forkOrient.clone()
+        .multiply(qAround(Y, forkPlaneAz + (360 / forkCount) * t))
+        .multiply(qAround(X, angle));
+      // Preserve approximately the unforked vertical reach despite the initial
+      // splay; cap compensation so a very wide edit cannot create giant arms.
+      const compensation = Math.min(1.35, 1 / Math.max(0.72, Math.cos(angle * Math.PI / 180)));
+      const leaderLength = trunkLen * (1 - forkHeight) * compensation;
+      buildStem({
+        level: 0,
+        origin: forkOrigin,
+        orient,
+        length: leaderLength,
+        radius: forkRadius * (p.trunkForkRadiusKeep ?? 0.72),
+        curveResOverride: Math.max(2, Math.round(
+          (p.curveRes?.[0] ?? 10) * (1 - forkHeight) * compensation,
+        )),
+        curveScale: 1 - forkHeight,
+        skipBaseFlare: true,
+        flareBase: forkRadius * (p.trunkForkFlareScale ?? 1),
+        windBase: forkWind,
+        childCountOverride: quotaBase + (t < quotaExtra ? 1 : 0),
+        decurrentEligible: true,
+        role: 'trunkLeader',
+        parentId: base.id,
+        p, rng, stems, tips,
+      });
+    }
+  } else {
+    const nTrunks = 1 + (p.baseSplits | 0);
+    for (let t = 0; t < nTrunks; t++) {
+      const orient = new Quaternion();
+      if (nTrunks > 1) {
+        // Splay multiple leaders out from the base.
+        const az = (360 / nTrunks) * t + rng.vary(0, 20);
+        orient.multiply(qAround(Y, az));
+        orient.multiply(qAround(X, rng.vary(p.baseSplitAngle, 8)));
+      }
+      buildStem({
+        level: 0,
+        origin: new Vector3(0, 0, 0),
+        orient,
+        length: trunkLen,
+        radius: trunkRadius,
+        // A normal one-trunk tree may shorten its leader just above the last
+        // scaffold. Base-split clones stay full-length so one clone cannot be
+        // trimmed by a child layout that belongs only to that cloned crown.
+        decurrentEligible: nTrunks === 1,
+        p, rng, stems, tips,
+      });
+    }
   }
 
   return { stems, tips, params: p };
 }
 
-function buildStem({ level, origin, orient, length, radius, p, rng, stems, tips, parentId }) {
-  const curveRes = Math.max(2, p.curveRes[level] | 0);
+function buildStem({
+  level, origin, orient, length, radius, p, rng, stems, tips, parentId,
+  curveResOverride, curveScale = 1, taperOverride, suppressChildren = false,
+  skipBaseFlare = false, flareBase, windBase = 0.05, childCountOverride,
+  decurrentEligible = false, openTip = false, role = null,
+}) {
+  const curveRes = Math.max(2, curveResOverride ?? (p.curveRes[level] | 0));
   const segLen = length / curveRes;
-  const uTaper = unitTaper(p.taper[level]);
+  const taperValue = taperOverride ?? p.taper[level];
+  const uTaper = unitTaper(taperValue);
 
   // Total curve for the stem, split across segments; curveBack makes an S.
-  const curve = p.curve[level];
-  const curveBack = p.curveBack[level];
-  const curveV = p.curveV[level];
+  const curve = (p.curve[level] ?? 0) * curveScale;
+  const curveBack = (p.curveBack[level] ?? 0) * curveScale;
+  const curveV = (p.curveV[level] ?? 0) * curveScale;
+  const zigzag = Math.max(0, p.zigzagAngle?.[level] ?? 0);
+  const zigzagV = Math.max(0, p.zigzagAngleV?.[level] ?? 0);
+  const zigzagPhase = zigzag > 0 && rng.next() < 0.5 ? -1 : 1;
+  let zigzagHeading = 0;
 
   const points = [origin.clone()];
   const radii = [radius];
@@ -153,6 +273,15 @@ function buildStem({ level, origin, orient, length, radius, p, rng, stems, tips,
     else segCurve = (i <= curveRes / 2 ? curve : curveBack) / (curveRes / 2);
     segCurve += rng.vary(0, curveV / curveRes);
     o.multiply(qAround(X, segCurve));
+    if (zigzag > 0) {
+      // Alternate an absolute lateral heading around the centreline. Applying
+      // the delta from the preceding target makes the path truly left/right,
+      // rather than merely adding equal rotations that drift in one direction.
+      const amplitude = Math.max(0, rng.vary(zigzag, zigzagV));
+      const targetHeading = zigzagPhase * (i % 2 ? amplitude : -amplitude);
+      o.multiply(qAround(Z, targetHeading - zigzagHeading));
+      zigzagHeading = targetHeading;
+    }
 
     // Vertical tropism: pulls a stem back toward vertical along its length. For
     // dichotomous species (yucca) this is the "elbow" — arms diverge at the
@@ -167,8 +296,9 @@ function buildStem({ level, origin, orient, length, radius, p, rng, stems, tips,
     if (twist) o.multiply(new Quaternion().setFromAxisAngle(Y, twist));
 
     // General growth force: bend toward forceDir with a per-section step that
-    // scales inversely with radius (heavy limbs resist). Runs on every level.
-    if (p.forceStrength) applyForce(o, p.forceDir, p.forceStrength, radius * (1 - uTaper * (i / curveRes)));
+    // scales inversely with radius (heavy limbs resist), starting at forceMinLevel.
+    const levelForce = p.forceStrength * (p.forceLevelScale?.[level] ?? 1);
+    if (levelForce && level >= (p.forceMinLevel ?? 0)) applyForce(o, p.forceDir, levelForce * segLen, radius * (1 - uTaper * (i / curveRes)));
 
     const fwd = Y.clone().applyQuaternion(o).normalize();
     pos.addScaledVector(fwd, segLen);
@@ -183,7 +313,7 @@ function buildStem({ level, origin, orient, length, radius, p, rng, stems, tips,
     // same radius*(1-z)), but only force it when taper is left at default — so an
     // edited terminal taper (e.g. L2 taper 0) actually takes effect. Open ends
     // from a lowered taper are sealed by the tip cap in branch-mesh.js.
-    if (level === p.levels - 1 && (p.taper[level] ?? 1) >= 0.99) r = radius * (1 - z);
+    if (level === p.levels - 1 && taperValue >= 0.99) r = radius * (1 - z);
     r = Math.max(r, 0.002);
 
     points.push(pos.clone());
@@ -191,8 +321,39 @@ function buildStem({ level, origin, orient, length, radius, p, rng, stems, tips,
     orients.push(o.clone());
   }
 
+  // Terminal guides may describe a curved hanging spray whose render card uses
+  // the guide's arc length along its chord. Shorten the whole guide uniformly
+  // when that card would cross the species' scalloped ground-clearance floor.
+  let resolvedLength = length;
+  if (level === p.levels - 1 && p.terminalFloor != null && points.length > 1) {
+    let arcLength = 0;
+    for (let i = 1; i < points.length; i++) {
+      arcLength += points[i - 1].distanceTo(points[i]);
+    }
+    const chord = points[points.length - 1].clone().sub(origin);
+    const chordLength = chord.length();
+    const downward = chordLength > 1e-5 ? Math.max(0, -chord.y / chordLength) : 0;
+    const azimuth = Math.atan2(origin.z, origin.x);
+    const floor = Math.max(
+      p.terminalFloorMin ?? -Infinity,
+      Math.min(
+        p.terminalFloorMax ?? Infinity,
+        p.terminalFloor
+          + (p.terminalFloorWave ?? 0) * Math.sin((p.terminalFloorLobes ?? 3) * azimuth)
+          + rng.vary(0, p.terminalFloorV ?? 0),
+      ),
+    );
+    const cardDrop = arcLength * downward;
+    const allowedDrop = origin.y - floor;
+    if (cardDrop > allowedDrop && cardDrop > 1e-5) {
+      const scale = Math.max(0.02, Math.max(0, allowedDrop) / cardDrop);
+      for (let i = 1; i < points.length; i++) points[i].sub(origin).multiplyScalar(scale).add(origin);
+      arcLength *= scale;
+    }
+    resolvedLength = arcLength;
+  }
   // Base flare on the trunk: swell the lowest points.
-  if (level === 0 && p.flare > 0) {
+  if (level === 0 && !skipBaseFlare && p.flare > 0) {
     for (let i = 0; i < points.length; i++) {
       const z = i / (points.length - 1);
       if (z < 0.15) radii[i] *= 1 + p.flare * (1 - z / 0.15);
@@ -204,7 +365,6 @@ function buildStem({ level, origin, orient, length, radius, p, rng, stems, tips,
   // and each other into one continuous-looking junction — the same overlapping
   // -base-flare trick the oak trunk uses for multi-leader bases. Closes the
   // "holes at junctions".
-  const flareBase = arguments[0].flareBase;
   if (flareBase) {
     for (let i = 0; i < points.length; i++) {
       const z = i / (points.length - 1);
@@ -216,7 +376,6 @@ function buildStem({ level, origin, orient, length, radius, p, rng, stems, tips,
   // weight its parent had at the attachment point (windBase) and gains
   // flexibility toward its tip — so a child's base always sways exactly with
   // the parent ring it grows from (no joint separation in the wind shader).
-  const windBase = arguments[0].windBase ?? 0.05;
   const flexGain = [0.3, 0.4, 0.5, 0.55][Math.min(level, 3)];
   const windTip = Math.min(1, windBase + flexGain);
   const winds = points.map((_, i) =>
@@ -228,11 +387,13 @@ function buildStem({ level, origin, orient, length, radius, p, rng, stems, tips,
     radii,
     orients,
     winds,
-    length,
+    length: resolvedLength,
     radialSegments: p.radialSegments[level] ?? 6,
     lobes: level === 0 ? p.lobes : 0,
     lobeDepth: p.lobeDepth,
     maxLevel: p.levels - 1,
+    openTip,
+    role,
   };
   // Branch topology (DFS insertion order): id = index in `stems`, parentId points
   // at the stem this one grew from (-1 for a trunk). Lets a consumer gather a
@@ -247,20 +408,30 @@ function buildStem({ level, origin, orient, length, radius, p, rng, stems, tips,
     tips.push({
       position: points[points.length - 1].clone(),
       orient: orients[orients.length - 1].clone(),
-      length,
+      length: resolvedLength,
     });
   }
+  if (suppressChildren) return stem;
 
   // Spawn children (parent-before-children keeps RNG deterministic).
   const childLevel = level + 1;
-  if (childLevel >= p.levels) return;
-  const nChildren = childCount(level, childLevel, p, rng);
-  if (nChildren <= 0) return;
+  if (childLevel >= p.levels) return stem;
+  const nChildren = Number.isFinite(childCountOverride)
+    ? Math.max(0, Math.round(childCountOverride))
+    : childCount(level, childLevel, p, rng, length);
+  if (nChildren <= 0) return stem;
 
-  // Children distributed from the bare base up to the tip.
-  const offsetStart = level === 0 ? p.baseSize : 0.1;
+  // Children distributed over a configurable interval of the parent. A power
+  // profile lets species such as willow retain an open structural interior by
+  // concentrating fine shoots on the outer/distal portions of load-bearing limbs.
+  const defaultStart = level === 0 ? p.baseSize : 0.1;
+  const offsetStart = Math.max(0, Math.min(0.98, p.branchStart?.[childLevel] ?? defaultStart));
+  const offsetEnd = Math.max(offsetStart + 0.01, Math.min(1, p.branchEnd?.[childLevel] ?? 1));
+  const distPower = Math.max(0.05, p.branchDistPower?.[childLevel] ?? 1);
   let azimuth = rng.range(0, 360);
   const tipC = p.tipCluster?.[childLevel] ?? 0;
+  const whorlSize = Math.max(1, p.whorlSize?.[childLevel] | 0);
+  const whorlNodes = Math.ceil(nChildren / whorlSize);
   // Dichotomous forks (yucca): all children spring from ONE node and diverge
   // by EQUAL, opposing angles in a shared plane (L-system F→F[+F][-F]). The
   // plane's orientation is randomized per node so the tree isn't 2D.
@@ -271,12 +442,23 @@ function buildStem({ level, origin, orient, length, radius, p, rng, stems, tips,
   // strict area preservation.
   const forkRadius = radius * (p.forkRadiusKeep ?? 0.85);
 
+  let jitterNode = -1, nodeJitter = 0;
+  let maxChildFrac = -Infinity;
   for (let c = 0; c < nChildren; c++) {
-    let frac = offsetStart + (1 - offsetStart) * ((c + 0.5) / nChildren);
+    const whorlSlot = c % whorlSize;
+    const nodeIndex = Math.floor(c / whorlSize);
+    if (nodeIndex !== jitterNode) {
+      jitterNode = nodeIndex;
+      nodeJitter = rng.vary(0, p.branchJitter?.[childLevel] ?? 0);
+    }
+    const nodeT = ((whorlSize > 1 ? nodeIndex : c) + 0.5) / (whorlSize > 1 ? whorlNodes : nChildren);
+    const spawnT = Math.pow(nodeT, distPower);
+    let frac = Math.max(offsetStart, Math.min(offsetEnd, offsetStart + (offsetEnd - offsetStart) * spawnT + nodeJitter));
     // Tip clustering: children spawn AT the parent's tip (frac→1) so they
     // emanate from one point and cover the parent's open tube end — no bare
     // spike above the fork.
     if (tipC > 0) frac = frac * (1 - tipC) + 1.0 * tipC;
+    maxChildFrac = Math.max(maxChildFrac, frac);
     const seg = frac * curveRes;
     const si = Math.min(curveRes - 1, Math.floor(seg));
     const st = seg - si;
@@ -285,7 +467,9 @@ function buildStem({ level, origin, orient, length, radius, p, rng, stems, tips,
     const cor = orients[si].clone().slerp(orients[si + 1], st);
     const pradiusHere = radii[si] * (1 - st) + radii[si + 1] * st;
 
-    const down = p.downAngle[childLevel] + rng.vary(0, p.downAngleV[childLevel]);
+    const down = p.downAngle[childLevel]
+      + (p.downAngleProgress?.[childLevel] ?? 0) * spawnT
+      + rng.vary(0, p.downAngleV[childLevel]);
     const cOrient = cor.clone();
     if (tipC > 0.5) {
       // L-system F→F[+F][-F]: a junction that DIDN'T fork (nChildren===1)
@@ -300,6 +484,13 @@ function buildStem({ level, origin, orient, length, radius, p, rng, stems, tips,
         cOrient.multiply(qAround(Y, forkPlaneAz + (360 / nChildren) * c + rng.vary(0, 12)));
         cOrient.multiply(qAround(X, down));
       }
+    } else if (whorlSize > 1) {
+      // One shared node/azimuth per whorl; siblings divide the full circle evenly.
+      // Successive nodes advance by rotate (90° gives dogwood's decussate pairs).
+      if (whorlSlot === 0) azimuth += p.rotate[childLevel] + rng.vary(0, p.rotateV[childLevel]);
+      const around = azimuth + (360 / whorlSize) * whorlSlot + rng.vary(0, p.rotateV[childLevel] * 0.15);
+      cOrient.multiply(qAround(Y, around));
+      cOrient.multiply(qAround(X, down));
     } else {
       azimuth += p.rotate[childLevel] + rng.vary(0, p.rotateV[childLevel]);
       cOrient.multiply(qAround(Y, azimuth));
@@ -307,11 +498,23 @@ function buildStem({ level, origin, orient, length, radius, p, rng, stems, tips,
     }
 
     // Shape-driven child length; radius from da Vinci (forks) or pipe model.
-    const lenFactor = p.length[childLevel] + rng.vary(0, p.lengthV[childLevel]);
     const shapeFrac = level === 0
-      ? shapeRatio(p.shape, 1 - (frac - offsetStart) / (1 - offsetStart))
+      ? shapeRatio(p.shape, 1 - spawnT)
       : 1;
-    const childLen = Math.max(0.05, length * lenFactor * shapeFrac);
+    const placementScale = (p.lengthScaleBase?.[childLevel] ?? 1) * (1 - spawnT)
+      + (p.lengthScaleTip?.[childLevel] ?? 1) * spawnT;
+    const absoluteLength = p.lengthAbsolute?.[childLevel];
+    let rawLength;
+    if (Number.isFinite(absoluteLength)) {
+      rawLength = (absoluteLength + rng.vary(0, p.lengthAbsoluteV?.[childLevel] ?? 0)) * placementScale;
+    } else {
+      const lenFactor = p.length[childLevel] + rng.vary(0, p.lengthV[childLevel]);
+      rawLength = length * lenFactor * shapeFrac * placementScale;
+    }
+    const childLen = Math.max(
+      p.lengthMin?.[childLevel] ?? 0.05,
+      Math.min(p.lengthMax?.[childLevel] ?? Infinity, rawLength),
+    );
     let childRadius;
     if (tipC > 0.5) {
       // A single continuation keeps the parent radius (same arm); a real fork
@@ -335,10 +538,44 @@ function buildStem({ level, origin, orient, length, radius, p, rng, stems, tips,
       parentId: stem.id, // topology link — lets consumers gather whole subtrees
     });
   }
+
+  if (decurrentEligible && p.decurrentTrunk && Number.isFinite(maxChildFrac)) {
+    trimStemToFraction(stem, Math.min(
+      1,
+      maxChildFrac + Math.max(0, p.decurrentTrunkExtension ?? 0.018),
+    ));
+  }
+  return stem;
+}
+
+// Shorten a generated leader after its children exist. Child origins are cloned,
+// so this safely removes the bare apical spear while retaining a small wood stub
+// beyond the highest scaffold and exact interpolated radius/orientation/wind.
+function trimStemToFraction(stem, fraction) {
+  const f = Math.max(0.02, Math.min(1, fraction));
+  if (f >= 0.999999 || stem.points.length < 2) return;
+  const last = stem.points.length - 1;
+  const sample = f * last;
+  const i = Math.min(last - 1, Math.floor(sample));
+  const t = sample - i;
+  const endPoint = stem.points[i].clone().lerp(stem.points[i + 1], t);
+  const endRadius = stem.radii[i] * (1 - t) + stem.radii[i + 1] * t;
+  const endOrient = stem.orients[i].clone().slerp(stem.orients[i + 1], t);
+  const endWind = stem.winds[i] * (1 - t) + stem.winds[i + 1] * t;
+  const keep = i + 1;
+  stem.points.splice(keep, stem.points.length - keep, endPoint);
+  stem.radii.splice(keep, stem.radii.length - keep, endRadius);
+  stem.orients.splice(keep, stem.orients.length - keep, endOrient);
+  stem.winds.splice(keep, stem.winds.length - keep, endWind);
+  let arc = 0;
+  for (let j = 1; j < stem.points.length; j++) {
+    arc += stem.points[j].distanceTo(stem.points[j - 1]);
+  }
+  stem.length = arc;
 }
 
 // Number of children a stem spawns; deeper/shorter stems get fewer.
-function childCount(level, childLevel, p, rng) {
+function childCount(level, childLevel, p, rng, parentLength) {
   const base = p.branches[childLevel] ?? 0;
   if (base <= 0) return 0;
   // Dichotomous forks: forkChance drives how often a node splits vs continues
@@ -352,6 +589,17 @@ function childCount(level, childLevel, p, rng) {
     return 2;
   }
   if (level === 0) return Math.round(base);
+  const spacing = p.branchSpacing?.[childLevel];
+  if (spacing > 0) {
+    const defaultStart = level === 0 ? p.baseSize : 0.1;
+    const start = p.branchStart?.[childLevel] ?? defaultStart;
+    const end = p.branchEnd?.[childLevel] ?? 1;
+    const occupiedLength = parentLength * Math.max(0, end - start);
+    const min = Math.max(1, p.branchMin?.[childLevel] ?? 1);
+    const max = Math.max(min, p.branchMax?.[childLevel] ?? Infinity);
+    const count = Math.max(1, Math.round(occupiedLength / spacing));
+    return Math.max(min, Math.min(max, count));
+  }
   return Math.max(1, Math.round(base * 0.6));
 }
 

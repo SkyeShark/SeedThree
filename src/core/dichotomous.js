@@ -53,6 +53,9 @@ const DEFAULTS = {
   trunks: 1,              // multi-trunk is rare
   trunkSplayDeg: 14,
   tileWorldSize: 0.8,     // bark UV tile (m)
+  windWeightScale: 1,     // scales the whole wind field: the flexGain ramp is
+                          // tuned for metre-scale trees; sub-metre SHRUBS get
+                          // tree amplitudes over centimetres and read as jello
 };
 
 // ---- skeleton (stochastic L-system) ----------------------------------------
@@ -325,7 +328,17 @@ export function generateDichotomous(userParams, rng) {
       const az = (Math.PI * 2 * t) / nTrunks;
       dir.applyAxisAngle(X, (p.trunkSplayDeg * Math.PI) / 180).applyAxisAngle(UP, az).normalize();
     }
-    grow(new Vector3(0, 0, 0), dir, p.trunkRadius, trunkLen, p.forkGenerations, 0, 0.05, 0, false, true);
+    // windBase 0: the ground-contact ring is PINNED. Any base weight makes the
+    // trunk slide laterally against the ground plane in the wind — invisible
+    // on a fat Joshua trunk, an obvious "broken ankle" on 2 cm shrub stems.
+    grow(new Vector3(0, 0, 0), dir, p.trunkRadius, trunkLen, p.forkGenerations, 0, 0, 0, false, true);
+  }
+
+  // Post-scale the wind field (bark aWind + foliage/fruit anchors all read
+  // stem.winds). Applied after growth so the fork-continuity invariant — the
+  // parent tip weight equalling the child base weight — survives untouched.
+  if ((p.windWeightScale ?? 1) !== 1) {
+    for (const s of stems) s.winds = s.winds.map((w) => w * p.windWeightScale);
   }
 
   const geometry = buildMergedMesh(stems, p);
@@ -339,7 +352,7 @@ export function generateDichotomous(userParams, rng) {
 // vertex count so stitching is i→i; rotation-minimizing frames avoid twist.
 
 const _rmfAxis = new Vector3();
-function ringVertices(center, tangent, refDir, radius, seg, uvY, uScale, out, ribCount = 0, ribDepth = 0, prevTangent = null, uPhase = 0) {
+function ringVertices(center, tangent, refDir, radius, seg, uvY, uScale, out, ribCount = 0, ribDepth = 0, prevTangent = null, uPhase = 0, swapUV = false) {
   // Rotation-minimizing frame. Naively RE-PROJECTING a fixed refDir onto each ring
   // (n = refDir − t·(refDir·t)) collapses when the tangent swings toward refDir on a
   // STRONG bend: n→0, we fall back to perp(tangent), and that basis-dependent vector
@@ -367,7 +380,11 @@ function ringVertices(center, tangent, refDir, radius, seg, uvY, uScale, out, ri
     const rr = ribDepth > 0 ? radius * (1 + ribDepth * Math.cos(ribCount * a)) : radius;
     out.pos.push(center.x + dir.x * rr, center.y + dir.y * rr, center.z + dir.z * rr);
     out.nrm.push(dir.x, dir.y, dir.z);
-    out.uv.push((j / seg) * uScale + uPhase, uvY);
+    // swapUV (barkGrainU): the bark image's grain runs along X, so put the
+    // stem's LENGTH on image X (u) and the ring wrap on image Y (v) — twig-pile
+    // tiles then read as fibres running along the branch, not rings around it.
+    if (swapUV) out.uv.push(uvY, (j / seg) * uScale + uPhase);
+    else out.uv.push((j / seg) * uScale + uPhase, uvY);
     out.wind.push(0);
     out.center.push(center.x, center.y, center.z); // centerline → wind sway phase
   }
@@ -379,13 +396,20 @@ function ringVertices(center, tangent, refDir, radius, seg, uvY, uScale, out, ri
 // WebGPU reuses the compiled pipeline instead of recompiling (~0.8s) every rebuild.
 export function buildMergedMesh(stems, params, targetGeo = null) {
   const p = { ...DEFAULTS, ...params };
+  // A zero/invalid rib-count can arrive while a cactus preset is being edited.
+  // In particular, older presets coupled `radialSegs` to `ribCount`, so setting
+  // ribs to zero also produced a zero-sided ring: j / seg then became 0 / 0 and
+  // filled every mesh attribute with NaNs. A tube always needs at least a
+  // triangle cross-section; zero ribs simply means a smooth tube.
+  p.ribCount = Math.max(0, Math.round(Number.isFinite(p.ribCount) ? p.ribCount : 0));
+  p.radialSegs = Math.max(3, Math.round(Number.isFinite(p.radialSegs) ? p.radialSegs : 3));
   // RIB LOCK invariant: the bark texture carries `ribsPerTile` rib-crest columns,
   // and the tube wraps it uScale = ribCount/ribsPerTile times. For the painted
   // areole holes to keep landing on the mesh crests (and the real spines) as the
   // user changes the rib COUNT, uScale must stay an integer → ribCount must stay a
   // multiple of ribsPerTile. Snap it here so ANY rib-count dial value stays aligned.
   if (p.ribCount > 0 && p.ribDepth > 0) {
-    const rpt = p.ribsPerTile ?? 4;
+    const rpt = Math.max(1, Math.round(Number.isFinite(p.ribsPerTile) ? p.ribsPerTile : 4));
     p.ribCount = Math.max(rpt, Math.round(p.ribCount / rpt) * rpt);
     p.radialSegs = Math.max(p.radialSegs, p.ribCount * 2); // ≥2 verts/rib, multiple of ribCount → a vertex on every crest
     p.radialSegs = Math.round(p.radialSegs / p.ribCount) * p.ribCount;
@@ -411,10 +435,58 @@ export function buildMergedMesh(stems, params, targetGeo = null) {
     }
   };
 
+  // RING DECIMATION (reduced/mobile LODs): the skeleton's ring cadence is
+  // GENERATOR-fixed — dense enough for the hero — and radialSegs only thins a
+  // stem around its GIRTH. This is the lever that thins it along its LENGTH:
+  // drop rings that add little shape, always keeping the base + tip (fork/weld
+  // rings), and keeping a ring once, since the last kept one, the accumulated
+  // BEND exceeds ringKeepAngle, the RADIUS drifts >12% (base flares/necks stay
+  // shaped), or the GAP exceeds ringMaxSpacing. Off (hero) when ringMaxSpacing
+  // is unset/0 — the stem is used as-is, no copies made.
+  const decimate = (p.ringMaxSpacing ?? 0) > 0;
+  const _da = new Vector3(), _db = new Vector3();
+  const ringsOf = (stem) => {
+    if (!decimate || stem.points.length <= 2) return stem;
+    const keepAng = ((p.ringKeepAngle ?? 15) * Math.PI) / 180;
+    const pts = stem.points;
+    const keep = [0];
+    let gap = 0, bend = 0, rKept = stem.radii[0];
+    for (let i = 1; i < pts.length - 1; i++) {
+      gap += pts[i].distanceTo(pts[i - 1]);
+      _da.subVectors(pts[i], pts[i - 1]).normalize();
+      _db.subVectors(pts[i + 1], pts[i]).normalize();
+      bend += _da.angleTo(_db);
+      const rDrift = Math.abs(stem.radii[i] - rKept) / Math.max(rKept, 1e-4);
+      if (bend >= keepAng || gap >= p.ringMaxSpacing || rDrift >= 0.12) {
+        keep.push(i); gap = 0; bend = 0; rKept = stem.radii[i];
+      }
+    }
+    keep.push(pts.length - 1);
+    // ANTI-ALIAS the kept rings onto the MEAN curve: the generator's gnarl
+    // wiggle is shorter than the decimated ring spacing, so sampling raw points
+    // lands rings on wiggle EXTREMES and the smooth wave reads as a jagged
+    // chord-kinked elbow. Each interior kept ring becomes the centroid of the
+    // skeleton points it replaced (window = halfway to its kept neighbours);
+    // base + tip stay exact (fork/weld/cap positions are load-bearing).
+    const n = keep.length;
+    const points = new Array(n), radii = new Array(n), winds = new Array(n);
+    for (let k = 0; k < n; k++) {
+      const i = keep[k];
+      if (k === 0 || k === n - 1) { points[k] = pts[i]; radii[k] = stem.radii[i]; winds[k] = stem.winds[i]; continue; }
+      const lo = Math.ceil((keep[k - 1] + i) / 2), hi = Math.floor((i + keep[k + 1]) / 2);
+      const c = new Vector3();
+      let r = 0, w = 0, m = 0;
+      for (let j = lo; j <= hi; j++) { c.add(pts[j]); r += stem.radii[j]; w += stem.winds[j]; m++; }
+      points[k] = c.divideScalar(m); radii[k] = r / m; winds[k] = w / m;
+    }
+    return { points, radii, winds };
+  };
+
   // Emit a stem's rings; return the base index of its FIRST and LAST ring so a
   // parent can stitch into the child's first, and children stitch into ours.
   function emitStem(stem, refDir0, vY0, tan0 = null) {
-    const { tangents } = framesFor(stem.points);
+    const sv = ringsOf(stem); // decimated view of points/radii/winds (or the stem itself)
+    const { tangents } = framesFor(sv.points);
     // A CONTINUATION child (main axis / single F) shares the parent's END tangent for
     // its first ring, so that ring is bit-identical to the parent's LAST ring (same
     // centre, tangent, frame, radius, rib phase). They then position-weld and the
@@ -429,8 +501,8 @@ export function buildMergedMesh(stems, params, targetGeo = null) {
     // stem and crushes the texels toward the top (the trunk "stretch"). Square
     // texels — V advances by the same world tile as U (tileV) — so bark furrows
     // keep a constant aspect on the trunk and the branches alike.
-    const refIdx = Math.min(stem.radii.length - 1, Math.floor(stem.radii.length * 0.5));
-    const circRef = 2 * Math.PI * stem.radii[refIdx];
+    const refIdx = Math.min(sv.radii.length - 1, Math.floor(sv.radii.length * 0.5));
+    const circRef = 2 * Math.PI * sv.radii[refIdx];
     // CACTUS RIB LOCK: the bark texture is painted with `ribsPerTile` rib crests
     // (each carrying its column of areole/spine holes). To land those painted holes
     // dead on the mesh's rib crests — and thus on the real spine cards seated there —
@@ -440,7 +512,13 @@ export function buildMergedMesh(stems, params, targetGeo = null) {
     // removes the per-stem rounding jump that misaligned one terminal segment). uPhase
     // = 0.5/ribsPerTile centres the crests inside the tile so the wrap seam falls in a
     // groove (hidden), matching how the texture is drawn.
-    const fluted = p.ribCount > 0 && p.ribDepth > 0;
+    // The UV lock keys off ribCount ALONE (not ribDepth): the SMOOTH far rungs
+    // (ribDepth 0 — mobile LOD3/LOD4 columns) must tile exactly like the fluted
+    // levels, or each stem falls back to its own circumference-derived wrap
+    // count and the trunk/arms visibly re-tile against each other and against
+    // the nearer LODs. (The radialSegs forcing in the header stays gated on
+    // ribDepth > 0 — smooth columns keep their cheap radial cut.)
+    const fluted = p.ribCount > 0;
     const ribsPerTile = p.ribsPerTile ?? 4;
     let uScale, uPhase = 0, tileV;
     if (fluted) {
@@ -461,21 +539,21 @@ export function buildMergedMesh(stems, params, targetGeo = null) {
     // so the junction is a smooth round collar and the ribs emerge as the arm rises —
     // exactly how a saguaro arm attaches. Continuation runs (same-level) keep full ribs.
     const fadeFork = stem.baseIsFork && p.ribDepth > 0;
-    let stemLen = 0; for (let i = 1; i < stem.points.length; i++) stemLen += stem.points[i].distanceTo(stem.points[i - 1]);
+    let stemLen = 0; for (let i = 1; i < sv.points.length; i++) stemLen += sv.points[i].distanceTo(sv.points[i - 1]);
     const fadeLen = Math.max(0.25, stemLen * 0.4);
     let arc = 0;
-    for (let i = 0; i < stem.points.length; i++) {
+    for (let i = 0; i < sv.points.length; i++) {
       const base = out.pos.length / 3;
-      if (i > 0) { const dl = stem.points[i].distanceTo(stem.points[i - 1]); vY += dl / tileV; arc += dl; }
+      if (i > 0) { const dl = sv.points[i].distanceTo(sv.points[i - 1]); vY += dl / tileV; arc += dl; }
       const rd = fadeFork ? p.ribDepth * smoothstep01(arc / fadeLen) : p.ribDepth;
-      ref = ringVertices(stem.points[i], tangents[i], ref, stem.radii[i], seg, vY, uScale, out, p.ribCount, rd, i > 0 ? tangents[i - 1] : null, uPhase);
+      ref = ringVertices(sv.points[i], tangents[i], ref, sv.radii[i], seg, vY, uScale, out, p.ribCount, rd, i > 0 ? tangents[i - 1] : null, uPhase, p.barkGrainU);
       // wind weight per ring vertex
-      for (let j = 0; j < ringLen; j++) out.wind[out.wind.length - ringLen + j] = stem.winds[i];
+      for (let j = 0; j < ringLen; j++) out.wind[out.wind.length - ringLen + j] = sv.winds[i];
       // rib-crest anchors: crestDir at each rib peak uses the SAME (n,b) frame AND the
       // faded rib depth the ring's vertices use, so an areole sits exactly on the crest.
       // Skip near-flat rings (rd≈0 at a fork collar) — no ridge for a spine to sit on.
       if (collectCrests && rd > 0.02) {
-        const c = stem.points[i], tn = tangents[i], rad = stem.radii[i];
+        const c = sv.points[i], tn = tangents[i], rad = sv.radii[i];
         const bvec = new Vector3().crossVectors(ref, tn).normalize();
         const rr = rad * (1 + rd);
         for (let k = 0; k < p.ribCount; k++) {
@@ -484,7 +562,7 @@ export function buildMergedMesh(stems, params, targetGeo = null) {
           crestAnchors.push({
             pos: new Vector3(c.x + cd.x * rr, c.y + cd.y * rr, c.z + cd.z * rr),
             normal: cd.clone(), tangent: tn.clone(), center: c.clone(),
-            radius: rad, wind: stem.winds[i], rib: k,
+            radius: rad, wind: sv.winds[i], rib: k,
           });
         }
       }
@@ -496,7 +574,11 @@ export function buildMergedMesh(stems, params, targetGeo = null) {
     // children: each starts at our end; stitch our last ring → child first ring.
     // A same-level child is the CONTINUATION (main axis) → hand it our end tangent so
     // its base ring welds seamlessly; higher-level children are divergent ARMS.
-    for (const child of stem.children) {
+    // p.skipStem (optional predicate): omit a subtree from the tube network — the
+    // rosette-card mobile rung drops TERMINAL arms whose geometry lives inside
+    // their baked cards. A parent whose children are all skipped caps like a tip.
+    const kids = p.skipStem ? stem.children.filter((c) => !p.skipStem(c)) : stem.children;
+    for (const child of kids) {
       const isContinuation = child.level === stem.level;
       const childFirst = emitStem(child, ref, vY, isContinuation ? lastTan : null);
       stitch(lastBase, childFirst.first);
@@ -504,10 +586,10 @@ export function buildMergedMesh(stems, params, targetGeo = null) {
     // ROUNDED STAR CAP on terminal tips: close the open tube end with a short
     // fluted dome whose radius (and thus rib amplitude) tapers to a smooth rounded
     // point — the domed star cap of a real saguaro arm/trunk tip (no hollow hole).
-    if (stem.children.length === 0) {
-      const capR = stem.radii[stem.radii.length - 1];
-      const capC = stem.points[stem.points.length - 1];
-      const capWind = stem.winds[stem.winds.length - 1];
+    if (kids.length === 0) {
+      const capR = sv.radii[sv.radii.length - 1];
+      const capC = sv.points[sv.points.length - 1];
+      const capWind = sv.winds[sv.winds.length - 1];
       const nDome = 3;
       // cap rings share one frame (all use lastTan) → compute n,b once for spine crests
       const nCap = new Vector3().copy(ref).addScaledVector(lastTan, -ref.dot(lastTan));
@@ -520,8 +602,8 @@ export function buildMergedMesh(stems, params, targetGeo = null) {
         const dC = capC.clone().addScaledVector(lastTan, capR * Math.sin(ang));
         const base = out.pos.length / 3;
         capVY += (capR / (nDome + 1)) / tileV;
-        ringVertices(dC, lastTan, ref, capR * Math.cos(ang), seg, capVY, uScale, out, p.ribCount, p.ribDepth, null, uPhase);
-        for (let j = 0; j < ringLen; j++) out.wind[out.wind.length - ringLen + j] = stem.winds[stem.winds.length - 1];
+        ringVertices(dC, lastTan, ref, capR * Math.cos(ang), seg, capVY, uScale, out, p.ribCount, p.ribDepth, null, uPhase, p.barkGrainU);
+        for (let j = 0; j < ringLen; j++) out.wind[out.wind.length - ringLen + j] = capWind;
         stitch(prev, base);
         prev = base;
         // Spine crests on the DOME: ONLY the top ring (near the apex). The dome's
@@ -538,6 +620,7 @@ export function buildMergedMesh(stems, params, targetGeo = null) {
               pos: new Vector3(dC.x + cd.x * rr, dC.y + cd.y * rr, dC.z + cd.z * rr),
               normal: nrm, tangent: lastTan.clone(), center: capC.clone(),
               radius: ringR, wind: capWind, rib: k,
+              cap: true, // apex-dome areole — the bright spine cap every saguaro tip wears
             });
           }
         }
@@ -553,8 +636,9 @@ export function buildMergedMesh(stems, params, targetGeo = null) {
       for (let j = 0; j <= seg; j++) {
         out.pos.push(aC.x, aC.y, aC.z);
         out.nrm.push(lastTan.x, lastTan.y, lastTan.z);
-        out.uv.push((j / seg) * uScale + uPhase, apexVY);
-        out.wind.push(stem.winds[stem.winds.length - 1]);
+        if (p.barkGrainU) out.uv.push(apexVY, (j / seg) * uScale + uPhase);
+        else out.uv.push((j / seg) * uScale + uPhase, apexVY);
+        out.wind.push(capWind);
         out.center.push(capC.x, capC.y, capC.z);
       }
       stitch(prev, apexBase);

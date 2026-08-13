@@ -23,6 +23,37 @@ function tangentAt(points, i, out) {
 }
 
 /**
+ * Exact index-triangle count for buildBranchGeometry without allocating vertex
+ * buffers. LOD budget solving calls this many times across radialScale's
+ * quantized plateaus, then meshes only the selected result once.
+ */
+export function estimateBranchTriangles(stems, opts = {}) {
+  const radialScale = opts.radialScale ?? 1;
+  const ringStride = Math.max(1, Math.round(opts.ringStride ?? 1));
+  let triangles = 0;
+
+  for (const stem of stems) {
+    const isTerminal = stem.level === stem.maxLevel;
+    const sides = (isTerminal && opts.terminalSides)
+      ? Math.max(3, Math.round(opts.terminalSides))
+      : Math.max(3, Math.round(stem.radialSegments * radialScale));
+    const stride = (isTerminal && opts.terminalRingStride)
+      ? Math.max(ringStride, Math.round(opts.terminalRingStride))
+      : ringStride;
+    const sourceRings = stem.points.length;
+    const rings = stride > 1 && sourceRings > 2
+      ? Math.ceil((sourceRings - 1) / stride) + 1
+      : sourceRings;
+    triangles += 2 * (rings - 1) * sides;
+
+    const tipRadius = stem.radii[stem.radii.length - 1];
+    if (tipRadius > 0.012 && !stem.openTip) triangles += sides;
+  }
+
+  return triangles;
+}
+
+/**
  * @param {Array} stems  from generateSkeleton()
  * @param {object} opts   { tileWorldSize } — world meters per bark tile repeat
  *                        { radialScale }  — LOD: scale ring vertex counts (min 3 sides)
@@ -173,7 +204,7 @@ export function buildBranchGeometry(stems, opts = {}) {
     // so cap texel density matches the walls; it's centred at tile (0.5, 0.5).
     let extraVerts = 0;
     const tipR = radii[rings - 1];
-    if (tipR > 0.012) {
+    if (tipR > 0.012 && !stem.openTip) {
       const tp = points[rings - 1];
       tangentAt(points, rings - 1, tan); // outward tip normal (the whole cap faces +tangent)
       const axN = fN[rings - 1], axB = fB[rings - 1];

@@ -60,19 +60,23 @@ export const saguaro = {
   },
   params: {
     firstForkHeight: 1.3,   // per-segment climb; total column ≈ firstForkHeight × forkGenerations
-    armLength: 1.3,         // arm segment length
+    // Arm silhouette dialed against Saguaro NP reference (+ GPT-5.6 Sol consult):
+    // a SHORT near-horizontal shoulder, a compact J-elbow, then a LONG straight
+    // vertical run with tips at ~0.8–0.95× leader height. The old 72°/0.6/3°/1.3
+    // set read as "continuous banana" arms that hugged the trunk.
+    armLength: 1.1,         // shorter straighter segments (height comes from segment count)
     armFalloff: 0.9,
     forkGenerations: 5,     // ~5 × 1.3 ≈ 6.5 m column (scene-scaled, not the real 12 m giant)
     branchiness: 0.55,      // per ELIGIBLE junction — tuned for mostly-branched with some single columns
     armAsymmetric: true,    // main axis continues + lateral arms curl up (candelabra)
-    armMinHeightFrac: 0.2,  // arms sprout from the lower-MID trunk up (not clustered at the very top)
+    armMinHeightFrac: 0.25, // arms sprout from the lower-MID trunk up (not clustered at the very top)
     armMaxOrder: 1,         // only the trunk sprouts arms; arms never re-branch (no bush of arms-off-arms)
-    armGenerations: 5,      // fresh arm depth → long candelabra J arms that rise toward the crown, regardless of sprout height
-    forkSpread: 72,         // arms jut out wide before curling up
-    curlUp: 0.6,            // strong upward pull → arms & column stay vertical
-    armBend: 3,             // saguaros are smooth/straight, barely any elbow
+    armGenerations: 4,      // arm run after the elbow — long but below the leader tip
+    forkSpread: 83,         // near-horizontal shoulder before the elbow
+    curlUp: 0.8,            // turn upright SOON after the shoulder (compact J)
+    armBend: 1,             // dead-straight vertical runs — bend made the whole arm crescent
     gnarliness: 4,          // low — clean columns, not gnarled
-    forkRadiusKeep: 0.72,   // arms a bit thinner than the trunk but still stout
+    forkRadiusKeep: 0.8,    // arms stout through the elbow, leader still clearly thicker
     forkBaseScale: 0.58,    // neck the arm base well inside the trunk so it doesn't poke out at the crotch
     trunkRadius: 0.34,      // thick columnar trunk
     trunkFlare: 0,          // saguaros never flare at the base

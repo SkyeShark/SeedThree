@@ -60,7 +60,7 @@ export function listSpecies() {
   return Object.entries(SPECIES).map(([key, sp]) => ({
     key, name: sp.name, latin: sp.latin ?? null, biome: sp.biome ?? null,
     foliageType: sp.foliageType ?? 'leaves', cactus: !!sp.cactus,
-    generator: sp.foliageType === 'rosette' ? 'dichotomous-lsystem' : 'weber-penn',
+    generator: (sp.foliageType === 'rosette' || sp.foliageType === 'sprayClusters') ? 'dichotomous-lsystem' : 'weber-penn',
   }));
 }
 
@@ -109,7 +109,13 @@ function globalKnobs(sp) {
 // need a renderer; the rest (mesh quality, distances, budgets, density, prune)
 // shape the real-geometry LODs and work headless.
 export const LOD_OPTIONS = [
-  { key: 'meshQuality', name: 'Mesh quality', min: 0.3, max: 1, step: 0.05, default: 1 },
+  // Branch/trunk quality (rosette cones are OFF this dial): sides AND ring
+  // density of the tubes. Default 0.8 is the normalization anchor (tree.js
+  // MESHQ_DEFAULT): mobile near ≈ 10k; 1 ≈ 13k; below default the ring
+  // decimation ramps up on every level including the hero LOD0.
+  { key: 'meshQuality', name: 'Branch/trunk quality', min: 0.3, max: 1, step: 0.05, default: 0.8 },
+  // Mobile perf + rosette species only: thins the NEAR rung's crowns + skirt.
+  { key: 'lod0Density', name: 'LOD0 rosette density', min: 0.2, max: 1, step: 0.05, default: 1 },
   { key: 'lod1Dist', name: 'LOD1 at (m)', min: 5, max: 80, step: 1, default: 35 },
   { key: 'lod2Dist', name: 'LOD2 at (m)', min: 15, max: 150, step: 1, default: 70 },
   { key: 'billboardDist', name: 'Billboard at (m)', min: 30, max: 300, step: 1, default: 120 },
@@ -154,10 +160,10 @@ export function getSchema(speciesKey) {
     }
     // General growth-force tropism (ez-tree parity).
     advanced.push(
-      { key: 'forceDirX', name: 'Force dir X', group: 'advanced', min: -1, max: 1, step: 0.01, default: 0 },
-      { key: 'forceDirY', name: 'Force dir Y', group: 'advanced', min: -1, max: 1, step: 0.01, default: 1 },
-      { key: 'forceDirZ', name: 'Force dir Z', group: 'advanced', min: -1, max: 1, step: 0.01, default: 0 },
-      { key: 'forceStrength', name: 'Force strength', group: 'advanced', min: 0, max: 0.12, step: 0.001, default: 0 },
+      { key: 'forceDirX', name: 'Force dir X', group: 'advanced', min: -1, max: 1, step: 0.01, default: sp.params?.forceDir?.x ?? 0 },
+      { key: 'forceDirY', name: 'Force dir Y', group: 'advanced', min: -1, max: 1, step: 0.01, default: sp.params?.forceDir?.y ?? 1 },
+      { key: 'forceDirZ', name: 'Force dir Z', group: 'advanced', min: -1, max: 1, step: 0.01, default: sp.params?.forceDir?.z ?? 0 },
+      { key: 'forceStrength', name: 'Force strength', group: 'advanced', min: 0, max: 0.12, step: 0.001, default: sp.params?.forceStrength ?? 0 },
     );
   }
 
@@ -376,7 +382,9 @@ function composeMaterials(sp, assets, sunLight = null) {
     assets.frondGreenTint = yucca.greenTint; assets.frondDryTint = yucca.dryTint;
     assets.frondDryestTint = yucca.dryestTint; assets.frondDryness = yucca.dryness;
   } else if (!sp.cactus) {
-    const leafFol = makeFoliageMaterial(assets, { ...sp.foliage, mode: 'leaves' });
+    const directMode = sp.foliage?.mode === 'willowCurtains'
+      ? 'willowCurtains' : 'leaves';
+    const leafFol = makeFoliageMaterial(assets, { ...sp.foliage, mode: directMode });
     assets.leafMat = leafFol.material; assets.leafCenter = leafFol.centerUniform;
     assets.leafTintNode = leafFol.tintNode; assets.leafTintAmount = leafFol.tintAmount;
     const clusterFol = makeFoliageMaterial(assets, { ...sp.foliage, mode: 'clusters' });

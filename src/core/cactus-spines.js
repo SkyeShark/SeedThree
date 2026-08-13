@@ -120,10 +120,24 @@ export function buildCactusSpines(crestAnchors, cfg, rng, material, reuseMesh = 
   };
 
   for (const a of crestAnchors) {
+    // NO cards on the apex dome ring (a.cap). With the reference-dialed arm
+    // silhouette (forkRadiusKeep 0.8 × armGenerations 4 → ~2× fatter tips,
+    // curlUp 0.8 → near-vertical domes) the top ring is wide and skyward
+    // enough that its crossed cards read as a dark scruffy tuft sticking up
+    // off every dome. The body rings already spine up to the dome base; the
+    // apex reads cleaner bare. (A real saguaro's pale apex cap would need a
+    // DEDICATED tip treatment — see the NOTE below — never this ring.)
+    if (a.cap) continue;
     if (c.density < 1 && rng.next() > c.density) continue;
     const N = a.normal;
     // T1 = stem tangent flattened into the tangent plane (areole rows run DOWN the
     // rib); T2 = N × T1 (across the rib). Crossed 90° about N.
+    // (NOTE: do NOT special-case a.cap anchors with never-cull + upscale — the
+    // apex dome ring has ~ribCount anchors at near-zero ring radius, so the
+    // embed push flings enlarged cards outward along near-vertical normals: a
+    // "ring of giant spines stretched at the sky". If the apex cap ever needs
+    // emphasis, it must be a NEW dedicated anchor at the tip point, not a
+    // scale-up of the dome ring.)
     _t1.copy(a.tangent).addScaledVector(N, -a.tangent.dot(N));
     if (_t1.lengthSq() < 1e-8) { _t1.set(N.z, N.x, N.y); _t1.addScaledVector(N, -_t1.dot(N)); }
     _t1.normalize();

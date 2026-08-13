@@ -25,8 +25,9 @@
 
 import {
   Scene, OrthographicCamera, RenderTarget, HemisphereLight, Box3, Vector3, Color,
-  CanvasTexture, MeshBasicMaterial, MeshBasicNodeMaterial, MeshSSSNodeMaterial,
+  CanvasTexture, DataTexture, RGBAFormat, MeshBasicMaterial, MeshBasicNodeMaterial, MeshSSSNodeMaterial,
   PlaneGeometry, Mesh, Group, DoubleSide, SRGBColorSpace, NoColorSpace,
+  LinearFilter, LinearMipmapLinearFilter,
 } from 'three/webgpu';
 import { texture, uniform, float, vec3, vec4, mix, positionWorld, normalWorld, cameraViewMatrix, modelWorldMatrix, mrt, output, normalView } from 'three/tsl';
 import { windStrength } from './wind.js';
@@ -119,27 +120,41 @@ export function processPixels(pixels, size, dilatePasses, srgb, flip) {
   return data;
 }
 
-// Build a CanvasTexture from already-processed pixels (main thread — needs DOM).
+// Build a texture from already-processed pixels. Browser: a CanvasTexture (the
+// app path — GLTFExporter embeds canvases without fuss). HEADLESS (Deno/
+// eidoverse, Node — no real DOM canvas, or a shimmed one whose ImageData can't
+// cross into the native canvas): fall back to a DataTexture. CanvasTexture
+// uploads with flipY=true and DataTexture doesn't, so the fallback pre-flips
+// the rows to keep the identical orientation.
 export function textureFromProcessedPixels(data, size, srgb) {
-  const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = size;
-  canvas.getContext('2d').putImageData(new ImageData(data, size, size), 0, 0);
-  const tex = new CanvasTexture(canvas);
+  if (typeof document !== 'undefined' && typeof ImageData !== 'undefined') {
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = size;
+      canvas.getContext('2d').putImageData(new ImageData(data, size, size), 0, 0);
+      const tex = new CanvasTexture(canvas);
+      tex.colorSpace = srgb ? SRGBColorSpace : NoColorSpace;
+      tex.anisotropy = 8;
+      tex.needsUpdate = true;
+      return tex;
+    } catch { /* shimmed DOM (headless harness) — use the DataTexture path */ }
+  }
+  const copy = new Uint8ClampedArray(data);
+  flipRows(copy, size, size);
+  const tex = new DataTexture(new Uint8Array(copy.buffer), size, size, RGBAFormat);
   tex.colorSpace = srgb ? SRGBColorSpace : NoColorSpace;
   tex.anisotropy = 8;
+  tex.magFilter = LinearFilter;
+  const canMipmap = size > 1 && (size & (size - 1)) === 0;
+  tex.minFilter = canMipmap ? LinearMipmapLinearFilter : LinearFilter;
+  tex.generateMipmaps = canMipmap;
   tex.needsUpdate = true;
   return tex;
 }
 
 function pixelsToTexture(pixels, size, dilatePasses, srgb, flip) {
   const data = processPixels(pixels, size, dilatePasses, srgb, flip);
-  const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = size;
-  canvas.getContext('2d').putImageData(new ImageData(data, size, size), 0, 0);
-  const tex = new CanvasTexture(canvas);
-  tex.colorSpace = srgb ? SRGBColorSpace : NoColorSpace;
-  tex.anisotropy = 8;
-  return tex;
+  return textureFromProcessedPixels(data, size, srgb);
 }
 
 // Unlit capture material for a data channel, preserving the source's alpha cutout.
@@ -234,7 +249,7 @@ function makeCardMaterial(t, cardH) {
   const detail = texture(t.normal).xyz.mul(2).sub(1);
   const nWorld = dome.add(detail.mul(0.55)).normalize();
   mat.normalNode = cameraViewMatrix.mul(vec4(nWorld, 0)).xyz.normalize();
-  // GTAO exclusion: write aomask=0 to the scene MRT so screen-space AO skips the flat
+  // N8AO exclusion: write aomask=0 to the scene MRT so screen-space AO skips the flat
   // card entirely — no whole-card blackout, no dark X-seam at the crossed-card crease.
   mat.mrtNode = mrt({ output, normal: normalView, aomask: float(0) });
   return mat;

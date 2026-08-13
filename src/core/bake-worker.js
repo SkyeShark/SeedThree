@@ -17,6 +17,7 @@ import { makeBarkMaterial } from './tree.js';
 import { makeFoliageMaterial } from './leaf-cards.js';
 import { makeYuccaMaterial } from './yucca-leaves.js';
 import { makeSpineMaterial } from './cactus-spines.js';
+import { makeFruitMaterial } from './fruit.js';
 
 let renderer = null;
 
@@ -42,6 +43,13 @@ self.onmessage = async (e) => {
         if (kind === 'bark') return makeBarkMaterial(assets);
         if (kind === 'spine') return makeSpineMaterial(assets);
         if (kind === 'rosette') return makeYuccaMaterial(assets).material; // returns { material, tints… } — bake needs the material
+        if (kind === 'fruit') {
+          return makeFruitMaterial({
+            map: assets.fruitTexture ?? null,
+            normalMap: assets.fruitNormal ?? null,
+            roughnessMap: assets.fruitRoughness ?? null,
+          });
+        }
 
         const built = makeFoliageMaterial(assets, { ...cfg, mode: 'clusters' });
         if (built.centerUniform) built.centerUniform.value.copy(center);

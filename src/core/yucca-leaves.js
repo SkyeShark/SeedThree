@@ -270,12 +270,23 @@ export function buildYuccaFoliage(terminalStems, cfg, rng, material, allStems = 
   // fill in and the branch tip / cone geometry underneath stops showing. LOD1/2
   // (density < 1) keep a single copy for polys.
   const crownCopies = (c.density ?? 1) >= 1 ? 2 : 1;
+  // MOBILE near rung (skirtToBark) only: below 0.5 the single-copy crown ITSELF
+  // thins — an even-spaced fraction of the nested layers survives (accumulator:
+  // deterministic, identical per crown). Anchored at 0.5 so the tuned near rung
+  // (0.48 ≈ 96%) barely moves; the "LOD0 rosette density" dial reaches down
+  // through this. Desktop crowns never thin (their density floor is above 0.5's
+  // reach only via this gate — the dial is mobile-only by design).
+  const crownFrac = c.skirtToBark ? Math.max(0.15, Math.min(1, (c.density ?? 1) / 0.5)) : 1;
   for (const stem of terminalStems) {
     frameAt(stem, 0.02, rp);
     greenTops.push(rp.pos.clone());
+    let crownAcc = 0;
     for (let ci = 0; ci < CROWN_N; ci++) {
       const lm = CONES[ci].lenMul, ag = CONES[ci].age;
       for (let d = 0; d < crownCopies; d++) {
+        crownAcc += crownFrac;
+        if (crownAcc < 1) continue;
+        crownAcc -= 1;
         // golden-angle spiral: each successive crown layer (and the 2nd interleaved
         // copy) is offset by 137.5° so blades pack without overlapping, + a small
         // jitter so it doesn't read mechanically perfect.
@@ -330,11 +341,14 @@ export function buildYuccaFoliage(terminalStems, cfg, rng, material, allStems = 
     //  • FORK parent → 0.0: the diverging arms leave the crotch bare, so cover it.
     const isContPar = stem.children && stem.children.length === 1 && stem.children[0].level === stem.level;
     const start = (stem.terminal || isContPar) ? 0.12 : 0.0;
-    // trunk-fork: only the top ~0.45 m (near the crotch) is skirted. skirtToBark: only
-    // the top ~0.3 m (the ~2 YELLOW cones just under the crown) stay as geometry — their
-    // age ramp colours them yellow-dry; the grey driest drape below is the thatch bark.
+    // trunk-fork: only the top ~0.45 m (near the crotch) is skirted. skirtToBark:
+    // only the top skirtTopLen metres under each crown stay as geometry (their age
+    // ramp colours them yellow-dry); the drape below is the thatch bark texture.
+    // skirtTopLen is a PER-LOD dial: real Joshua sleeves cover most of each arm
+    // (reference: Joshua Tree NP), so the NEAR mobile rung keeps a long top skirt
+    // and farther rungs shorten it — the old fixed 0.3 m read as bare plastic tubes.
     const end = trunkFork ? Math.min(total * 0.99, 0.45)
-              : c.skirtToBark ? Math.min(total * 0.99, start + 0.3)
+              : c.skirtToBark ? Math.min(total * 0.99, start + (c.skirtTopLen ?? 0.3))
               : total * 0.99;
     // WHOLE-PLANT bottom-up coherent thinning at reduced density (LOD / mobile): march
     // at the FINE step and keep cones via an accumulator whose rate is the keep-fraction

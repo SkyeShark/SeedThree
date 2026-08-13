@@ -23,6 +23,9 @@ function matKindOf(geo) {
   if (a.aStemCenter) return 'bark';
   if (a.aPack) return 'rosette';
   if (a.aThickness) return 'foliage';
+  // Fruit instances carry the foliage wind attrs but no aThickness (no SSS) —
+  // without this they fell to 'bark' and the billboard baked bark-mapped apples.
+  if (a.aWindVec && a.aAnchorPos) return 'fruit';
   return 'bark';
 }
 
@@ -63,7 +66,8 @@ export async function serializeSource(sourceGroup, assets, center) {
   // textures → ImageBitmaps (transferable). One entry per asset key we might need.
   const texKeys = ['barkTexture', 'barkNormal', 'barkRoughness',
     'leafTexture', 'leafNormal', 'leafRoughness', 'leafTranslucency',
-    'leafDryTexture', 'leafDryestTexture']; // rosette materials read the leaf* keys too
+    'leafDryTexture', 'leafDryestTexture', // rosette materials read the leaf* keys too
+    'fruitTexture', 'fruitNormal', 'fruitRoughness'];
   const bitmaps = {};
   for (const k of texKeys) {
     const tex = assets?.[k];

@@ -78,7 +78,7 @@ export function instancedBarkWindPosition() {
 // surface does. The whole card shares its anchor's phase (a rigid
 // translation; losing the sub-30cm phase gradient across one leaf is
 // invisible). Flutter scales by leaf-LOCAL height: zero at the anchor.
-export function foliageWindPosition(withFlutter = true) {
+export function foliageWindPosition(withFlutter = true, flutterScale = 1) {
   const windLocal = attribute('aWindVec', 'vec3'); // heading × weight, instance frame
   const anchorWorld = modelWorldMatrix.mul(vec4(attribute('aAnchorPos', 'vec3'), 1)).xyz;
   const base = windLocal.mul(swayAt(anchorWorld).mul(windStrength.mul(0.35)));
@@ -92,8 +92,12 @@ export function foliageWindPosition(withFlutter = true) {
   const rnd = attribute('aThickness', 'float'); // 0.4..1 per instance
   const local = positionGeometry.y.max(0.0);
   const flutterT = time.mul(windSpeed).mul(5.2).add(rnd.mul(37.7));
+  // Gate flutter by the anchor's wind weight (carried in aWindVec's length ≈
+  // weight/size): a leaf whose twig is pinned must not shimmer — low-anchored
+  // shrub sprays fluttering over dead-still wood read as broken wind.
+  const gate = windLocal.length().mul(2.5).clamp(0, 1);
   const flutter = vec3(sin(flutterT), sin(flutterT.mul(1.31)).mul(0.6), sin(flutterT.mul(0.77)))
-    .mul(windStrength.mul(0.05)).mul(rnd).mul(local);
+    .mul(windStrength.mul(0.05 * flutterScale)).mul(rnd).mul(local).mul(gate);
   return positionLocal.add(base).add(flutter);
 }
 

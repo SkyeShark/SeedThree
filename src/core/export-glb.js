@@ -144,11 +144,14 @@ function buildExportTree(lodRoot) {
         // kills the crossed-card light/dark disagreement in engines too.
         // Dome origin at the canopy BOTTOM (mid-canopy origins give downward
         // normals below them → black underside in engines).
+        // Fruit is SOLID geometry with real baked normals — dome-bending them
+        // would shade every apple like a leaf card; export those untouched.
         if (!im.boundingSphere) im.computeBoundingSphere();
         if (!im.boundingBox) im.computeBoundingBox();
         const domeOrigin = im.boundingSphere.center.clone();
         domeOrigin.y = im.boundingBox.min.y - 0.5;
-        const merged = mergeGeometries(expandInstances(im, 0.85, domeOrigin), false);
+        const bend = im.name === 'fruit' ? 0 : 0.85;
+        const merged = mergeGeometries(expandInstances(im, bend, domeOrigin), false);
         disposables.push(merged);
         return { geo: merged, material: im.material };
       });

@@ -11,6 +11,14 @@ import { loblolly } from './loblolly.js';
 import { douglasFir } from './douglas-fir.js';
 import { apple } from './apple.js';
 import { cherry } from './cherry.js';
+import { paperBirch } from './paper-birch.js';
+import { quakingAspen } from './quaking-aspen.js';
+import { americanSycamore } from './american-sycamore.js';
+import { floweringDogwood } from './flowering-dogwood.js';
+import { weepingWillow } from './weeping-willow.js';
+import { creosote } from './creosote.js';
+import { blackbrush } from './blackbrush.js';
+import { sagebrush } from './sagebrush.js';
 
 export const SPECIES = {
   whiteOak,
@@ -23,8 +31,16 @@ export const SPECIES = {
   douglasFir,
   apple,
   cherry,
+  paperBirch,
+  quakingAspen,
+  americanSycamore,
+  floweringDogwood,
+  weepingWillow,
   joshuaTree,
   saguaro,
+  creosote,
+  blackbrush,
+  sagebrush,
 };
 
 export const DEFAULT_SPECIES = 'whiteOak';

@@ -55,7 +55,7 @@ export function controlsFromSpecies(species) {
     leafSizeVar: species.foliage?.sizeVar ?? 0.3,
     leafAlpha: species.foliage?.alphaTest ?? 0.4,
     leafQuads: species.foliage?.quads ?? 2,
-    barkTint: 0xffffff,
+    barkTint: species.barkTint ?? 0xffffff, // species may cool/darken its wood
     barkFlat: false,
     // Desert species color editing. Fronds (Joshua/yuccas) have 3 age-stage tints
     // + a dryness bias; cactus spines (saguaro) tint like bark. All default to no
@@ -101,17 +101,24 @@ export function applySpeciesControls(species, c) {
       s.params[key] = arr;
     }
   }
-  // General growth force (ez-tree tropism vector).
-  if (c.forceStrength) {
-    s.params.forceDir = { x: c.forceDirX ?? 0, y: c.forceDirY ?? 1, z: c.forceDirZ ?? 0 };
-    s.params.forceStrength = c.forceStrength;
-  }
+  // General growth force (ez-tree tropism vector). Always write the strength:
+  // a zero on the slider must be able to disable a non-zero species/preset
+  // default rather than leaving the cloned source value in place.
+  s.params.forceDir = { x: c.forceDirX ?? 0, y: c.forceDirY ?? 1, z: c.forceDirZ ?? 0 };
+  s.params.forceStrength = c.forceStrength ?? species.params?.forceStrength ?? 0;
   // Leaf GEOMETRY overrides (ez-tree parity) — reshape the foliage cards on rebuild.
   // Tint/alphaTest are MATERIAL props applied live (cached material), not here.
   if (s.foliage) {
-    if (c.leafAngle !== undefined) s.foliage.downAngle = c.leafAngle;
-    if (c.leafStart !== undefined) s.foliage.startFrac = c.leafStart;
-    if (c.leafSizeVar !== undefined) s.foliage.sizeVar = c.leafSizeVar;
+    const isCurtain = s.foliage.mode === 'hangingSprays' || s.foliage.mode === 'willowCurtains';
+    if (!isCurtain) {
+      if (c.leafAngle !== undefined) s.foliage.downAngle = c.leafAngle;
+      if (c.leafStart !== undefined) s.foliage.startFrac = c.leafStart;
+      if (c.leafSizeVar !== undefined) s.foliage.sizeVar = c.leafSizeVar;
+    } else {
+      // Curtain length variation is authored into the floor-clipped guides.
+      // Scaling cards afterward can put their hem underground.
+      s.foliage.sizeVar = 0;
+    }
     if (c.leafQuads !== undefined) s.foliage.quads = c.leafQuads;
   }
   if (c.showLeaves === false) s.foliage = false;
@@ -138,38 +145,59 @@ export function buildGUI(opts) {
   gui.domElement.querySelector(':scope > .lil-title')?.remove(); // brand replaces the default title bar
   mountPanelFX(gui.domElement); // living-sap-veins GPU background
 
-  const incompleteSpecies = new Set(['apple', 'cherry']);
+  // (apple/cherry carried an "(incomplete)" tag until the 08-12 orchard pass:
+  // reference-tuned habits + Orrery/Tripo fruit — nothing pending now.)
+  const incompleteSpecies = new Set([]);
   const speciesLabel = (key) => `${speciesMap[key].name}${incompleteSpecies.has(key) ? ' (incomplete)' : ''}`;
   const speciesNames = {};
   for (const key of Object.keys(speciesMap)) speciesNames[speciesLabel(key)] = key;
 
   const proxy = { species: state.speciesKey, ...state.controls };
 
-  // Mobile Target availability + LOD-slider semantics live here so they can react
-  // to species changes. Desert (rosette) species have no branch cards, so the
-  // card-based mobile mode doesn't apply — the toggle is hidden for them. When
-  // mobile is EFFECTIVELY active (toggle on AND a card species) the LOD1/LOD2
-  // dials relabel to card terms and the budget-% dials (no-ops on cards) hide.
-  let cMobile, cMeshQ, cLod1Pct, cLod2Pct, cLod1Den, cLod2Den, cLod1Prn, cLod2Prn;
+  // Mobile-target availability + LOD-slider semantics live here so they react
+  // to species changes. Rosettes have their own mobile ladders; controls that
+  // only feed temperate branch cards or deliberately spineless cactus rungs are
+  // hidden rather than left as inert knobs.
+  let cMobile, cMeshQ, cLod0Den, cLod1Pct, cLod2Pct, cLod1Den, cLod2Den, cLod1Prn, cLod2Prn, cCardRes, cCardVariants;
   function applyMobileUI() {
     if (!cMobile) return;
     const sp = speciesMap[state.speciesKey];
     const isRosette = sp?.foliageType === 'rosette';
     const isCactus = isRosette && !!sp?.cactus;   // saguaro: spines, fluted ribs
-    cMobile.show(true);                            // mobile target now works on rosettes too
+    const isWillow = sp?.foliage?.mode === 'willowCurtains';
+    cMobile.show(true);                            // mobile target works on both generator paths
     const m = !!optState?.mobileTarget;           // mobile ladder (temperate cards OR rosette lighter-cone near)
     // ROSETTE path (Joshua/yucca/saguaro): budget% and prune don't apply (no branch
     // cards / no twig skeleton to prune), so hide them; density → rosette/spine
     // density, quality → cone/rib detail. Temperate path keeps its card/budget dials.
     cLod1Pct.show(!m && !isRosette); cLod2Pct.show(!m && !isRosette);
-    cLod1Prn.show(!m && !isRosette); cLod2Prn.show(!m && !isRosette);
-    cMeshQ.name(isRosette ? (isCactus ? 'Rib & spine detail' : 'Mesh detail')
-                          : (m ? 'Twig / skeleton quality' : 'LOD0 mesh quality'));
+    cLod1Prn.show(!m && !isRosette && !isWillow);
+    cLod2Prn.show(!m && !isRosette && !isWillow && !sp?.preserveLod2Tips);
+    // This dial owns structural tubes only. Cactus rib counts and spine density
+    // are species controls; here it only changes lengthwise ring density below
+    // the tuned default. Rosette cones are fixed per-LOD on purpose.
+    cMeshQ.name(isCactus ? 'Column / arm ring density'
+      : isRosette ? 'Branch / trunk quality'
+      : m ? 'Twig / skeleton quality' : 'Branch / trunk quality');
+    // LOD0 rosette density exists only where the mobile NEAR rung does — the
+    // desktop hero always renders full crowns.
+    cLod0Den.show(m && isRosette && !isCactus);
     const denLabel = isCactus ? 'spine density' : isRosette ? 'rosette density' : m ? 'card density' : 'foliage density';
+    // Desktop cactus LOD2 intentionally has no ribs/crest anchors and therefore
+    // no spines. In mobile mode LOD1 is parked, while the promoted near rung
+    // consumes lod2Density. Expose only the density dial that reaches a visible
+    // spine mesh in each mode.
+    cLod1Den.show(!isCactus || !m);
+    cLod2Den.show(!isCactus || m);
     cLod1Den.name(`LOD1 ${denLabel}`);
-    cLod2Den.name(`LOD2 ${denLabel}`);
+    cLod2Den.name(isCactus && m ? 'Near spine density' : `LOD2 ${denLabel}`);
     cLod1Prn.name(m ? 'LOD1 twig prune' : 'LOD1 branch prune');
     cLod2Prn.name(m ? 'LOD2 twig prune' : 'LOD2 branch prune');
+    // Temperate trees bake cards in desktop and mobile modes. A non-cactus
+    // rosette only bakes terminal-arm cards in mobile mode; cactus never does.
+    const usesCardBakes = !isRosette || (m && !isCactus && sp?.foliage !== false);
+    cCardRes?.show(usesCardBakes);
+    cCardVariants?.show(usesCardBakes);
   }
 
   gui.add(proxy, 'species', speciesNames).name('Species').onChange((key) => {
@@ -198,7 +226,12 @@ export function buildGUI(opts) {
         : shape.add(proxy, d.key, d.min, d.max, d.step);
       ct.name(d.name).onChange((v) => { state.controls[d.key] = v; onChange(); });
     }
-    shape.add(proxy, 'showLeaves').name('Show leaves').onChange((v) => { state.controls.showLeaves = v; onChange(); });
+    // foliage:false species (currently saguaro) build neither leaf cards nor
+    // rosettes, so a Show-leaves toggle cannot affect their separately-built
+    // spine system.
+    if (sp.foliage !== false) {
+      shape.add(proxy, 'showLeaves').name('Show leaves').onChange((v) => { state.controls.showLeaves = v; onChange(); });
+    }
     shape.add(proxy, 'tileWorldSize', 0.6, 3.0, 0.05).name('Bark tiling (m)').onChange((v) => { state.controls.tileWorldSize = v; onChange(); });
   }
   buildParamControls();
@@ -265,6 +298,7 @@ export function buildGUI(opts) {
     bark.controllers.slice().forEach((ct) => ct.destroy());
     const sp = speciesMap[state.speciesKey];
     const isRosette = sp.foliageType === 'rosette';
+    const isHangingSpray = sp.foliage?.mode === 'hangingSprays' || sp.foliage?.mode === 'willowCurtains';
     const isCactus = !!sp.cactus;              // saguaro → spines
     const isFrondRosette = isRosette && !isCactus; // Joshua/yuccas → fronds
     // Rosette species (yucca/cactus) don't use the leaf-card material, so hide the
@@ -275,9 +309,11 @@ export function buildGUI(opts) {
       // texture toward it (luminance-preserving — keeps vein/shading detail).
       leaves.addColor(proxy, 'leafColorize').name('Tint').onChange(mtweak('leafColorize'));
       leaves.add(proxy, 'leafTintAmount', 0, 1, 0.01).name('Tint amount').onChange(mtweak('leafTintAmount'));
-      leaves.add(proxy, 'leafAngle', 0, 100, 1).name('Angle').onChange(geom('leafAngle'));
-      leaves.add(proxy, 'leafStart', 0, 1, 0.01).name('Start').onChange(geom('leafStart'));
-      leaves.add(proxy, 'leafSizeVar', 0, 1, 0.01).name('Size variance').onChange(geom('leafSizeVar'));
+      if (!isHangingSpray) {
+        leaves.add(proxy, 'leafAngle', 0, 100, 1).name('Angle').onChange(geom('leafAngle'));
+        leaves.add(proxy, 'leafStart', 0, 1, 0.01).name('Start').onChange(geom('leafStart'));
+        leaves.add(proxy, 'leafSizeVar', 0, 1, 0.01).name('Size variance').onChange(geom('leafSizeVar'));
+      }
       leaves.add(proxy, 'leafAlpha', 0, 1, 0.01).name('Alpha test').onChange(mtweak('leafAlpha'));
       leaves.add(proxy, 'leafQuads', { 'Single': 1, 'Crossed (double)': 2 }).name('Billboard').onChange(geom('leafQuads'));
     }
@@ -314,14 +350,14 @@ export function buildGUI(opts) {
       'LOD2 — baked cards': 2,
       'LOD3 — billboard': 3,
     }).name('Preview level').onChange(() => onOpt('preview'));
-    // Mobile target: keep the full mesh ladder built but hidden; render the baked
-    // card LOD2 as the near LOD plus two cheaper card levels. In this mode the
-    // LOD1/LOD2 dials retarget onto those two card levels, so their labels switch
-    // to card semantics and the mesh-only dials (budget %, mesh quality — no-ops
-    // on a card LOD) hide. applyMobileOptLabels() below does the swap.
+    // Mobile target keeps the full mesh ladder built but hidden and promotes a
+    // cheaper near rung. Temperate trees use branch cards; rosettes use their
+    // dedicated cone/card or rib/spine ladder.
     cMobile = opt.add(optState, 'mobileTarget').name('Mobile performance target')
       .onChange(() => { applyMobileUI(); onOpt('rebuild'); });
     cMeshQ = opt.add(optState, 'meshQuality', 0.3, 1, 0.05).name('LOD0 mesh quality').onChange(() => onOpt('rebuild'));
+    // Mobile-perf-only (rosette species): thins the NEAR rung's crowns + skirt.
+    cLod0Den = opt.add(optState, 'lod0Density', 0.2, 1, 0.05).name('LOD0 rosette density').onChange(() => onOpt('rebuild'));
     opt.add(optState, 'lod1Dist', 5, 80, 1).name('LOD1 at (m)').onChange(() => onOpt('dist'));
     opt.add(optState, 'lod2Dist', 15, 150, 1).name('LOD2 at (m)').onChange(() => onOpt('dist'));
     opt.add(optState, 'billboardDist', 30, 300, 1).name('Billboard at (m)').onChange(() => onOpt('dist'));
@@ -334,11 +370,11 @@ export function buildGUI(opts) {
     cLod2Pct = opt.add(optState, 'lod2Pct', 4, 40, 1).name('LOD2 budget (%)').onChange(() => onOpt('rebuild'));
     cLod2Den = opt.add(optState, 'lod2Density', 0.2, 1, 0.05).name('LOD2 foliage density').onChange(() => onOpt('rebuild'));
     cLod2Prn = opt.add(optState, 'lod2Prune', 0, 0.85, 0.05).name('LOD2 branch prune').onChange(() => onOpt('rebuild'));
-    applyMobileUI(); // reflect the initial species + mobile state (hides toggle on rosettes)
     // Bake quality: card res/variants invalidate the card cache → rebake+rebuild.
-    opt.add(optState, 'cardRes', { '256²': 256, '512²': 512, '1024²': 1024 }).name('Card bake res').onChange(() => onOpt('rebuild'));
-    opt.add(optState, 'cardVariants', { 2: 2, 3: 3, 4: 4 }).name('Card variants').onChange(() => onOpt('rebuild'));
+    cCardRes = opt.add(optState, 'cardRes', { '256²': 256, '512²': 512, '1024²': 1024 }).name('Card bake res').onChange(() => onOpt('rebuild'));
+    cCardVariants = opt.add(optState, 'cardVariants', { 2: 2, 3: 3, 4: 4 }).name('Card variants').onChange(() => onOpt('rebuild'));
     opt.add(optState, 'billboardRes', { '512²': 512, '1024²': 1024, '2048²': 2048 }).name('Billboard res').onChange(() => onOpt('rebake'));
+    applyMobileUI(); // reflect the initial species + mode after every dynamic controller exists
   }
 
   if (sunState && onSun) {
@@ -353,7 +389,7 @@ export function buildGUI(opts) {
       env.add(envState, 'showScaleRef').name('Scale ref (1.8m)').onChange((v) => onScaleRef(v));
       if (onFog) env.add(envState, 'fog').name('Distance fog').onChange(() => onFog());
       if (onSpom) env.add(envState, 'spom').name('Parallax terrain (SPOM)').onChange(() => onSpom());
-      if (onGtao) env.add(envState, 'gtao').name('Ambient occlusion (GTAO)').onChange(() => onGtao());
+      if (onGtao) env.add(envState, 'gtao').name('Ambient occlusion (N8AO)').onChange(() => onGtao());
       if (onAA) env.add(envState, 'aa').name('Antialiasing (MSAA)').onChange(() => onAA());
       if (onForest) env.add(envState, 'forestCount', 0, 96, 8).name('Forest trees').onChange(() => onForest());
     }

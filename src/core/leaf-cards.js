@@ -14,6 +14,7 @@ import {
 } from 'three/webgpu';
 import { positionWorld, normalView, mix, normalize, uniform, texture, attribute, float, normalMap, cameraViewMatrix, vec3, vec4, luminance, color } from 'three/tsl';
 import { foliageWindPosition, WIND_DIR } from './wind.js';
+import { buildWillowCurtains } from './willow-curtains.js';
 
 // Per-instance random "thickness" (0.4–1) so leaves don't all transmit identically
 // when backlit — the key fix for uniform-glow (Unreal PerInstanceRandom style).
@@ -30,12 +31,16 @@ const DOWN = new Vector3(0, -1, 0);
 const GOLDEN = (137.5 * Math.PI) / 180;
 
 // Base-anchored leaf quad(s): base edge at y=0, tip at y=1, width along x, normal +Z.
+// Hanging sprays still extend along local +Y (so flutter grows away from their
+// attachment), but reverse V: the authored vine attaches at the IMAGE TOP.
 // `quads=2` adds a second quad rotated 90° about the length axis for volume.
-function makeLeafGeometry(quads = 2) {
+function makeLeafGeometry(quads = 2, topAnchored = false) {
   const positions = [], normals = [], uvs = [], indices = [];
   const base = [[-0.5, 0], [0.5, 0], [0.5, 1], [-0.5, 1]];
   // v = y so the leaf's petiole (image bottom) sits at the quad base (the twig).
-  const uv = [[0, 0], [1, 0], [1, 1], [0, 1]];
+  const uv = topAnchored
+    ? [[0, 1], [1, 1], [1, 0], [0, 0]]
+    : [[0, 0], [1, 0], [1, 1], [0, 1]];
   let b = 0;
   for (let q = 0; q < quads; q++) {
     const a = (q * Math.PI) / quads; // 0, 90°, ...
@@ -69,8 +74,12 @@ const DEFAULTS = {
   droop: 22,            // gravity droop toward the ground (deg) — FloraSynth-style sag
   droopV: 12,
   bend: 0,             // 0..1 bend toward light; >0 can rake leaves back toward the base
+  whorlSize: 1,        // >1 groups leaves at one node (opposite leaves use 2)
+  rotate: 90,          // degrees advanced between successive whorl planes
+  rotateV: 0,
   quads: 2,
   tint: 0x88a24a,
+  flutterScale: 1,
   alphaTest: 0.4,
   trunkClearRadius: 0, // >0: cull leaves whose anchor sits within this radius of the
                        // trunk axis — removes the occluded on-trunk leaves that pile
@@ -78,7 +87,7 @@ const DEFAULTS = {
   domeStrength: 0.45,   // canopy-volume hint; balances flat-card shadowing vs washout
   // SpeedTree-style cluster sprays (far fewer instances than single leaves,
   // placed with the same leaf grammar — see buildFoliage).
-  mode: 'leaves',        // 'leaves' | 'clusters'
+  mode: 'leaves',        // 'leaves' | 'clusters' | 'hangingSprays'
   clustersPerBranch: 3,
   clusterSize: 1.3,      // spray card span (m) ≈ a terminal branch's leafy run
   clusterSizeVar: 0.3,
@@ -156,14 +165,21 @@ export function makeFoliageMaterial(assets, cfg) {
   const domeView = cameraViewMatrix.mul(vec4(domeWorld, 0)).xyz.normalize();
   const relief = texNormal ? normalMap(texture(texNormal)).sub(normalView) : float(0);
   mat.normalNode = normalize(domeView.add(relief.mul(0.9)));
-  mat.positionNode = foliageWindPosition(); // canopy sway + per-instance flutter
+  // Willow curtains are one tree-space merged mesh. Their per-ring sway bends
+  // the long vines; instanced-leaf local-Y flutter is intentionally disabled.
+  mat.positionNode = foliageWindPosition(c.mode !== 'willowCurtains', c.flutterScale);
   // Backlit translucency (Barré-Brisebois SSS) — leaves glow when lit from behind,
   // which is what makes foliage read as living leaves instead of flat albedo cards.
   // Backlit transmission = (per-texel translucency map) × (per-instance random) ×
   // desaturated transmitted green. The per-instance term is what breaks the
   // "every leaf glows the same" look; ambient=0 removes the flat glow floor.
   // (Engine-translucency research: Unreal Two-Sided Foliage / Barré-Brisebois.)
-  const transmit = uniform(new Color().setRGB(0.42, 0.62, 0.24));
+  // Backlit transmission color is SPECIES-configurable: the broadleaf default
+  // is a leafy green, but grey-olive desert shrubs glow visibly green with it
+  // (the "blackbrush turned green" bug) — they pass the muted values their
+  // ground-scrub twins already use.
+  const tr = c.transmit ?? [0.42, 0.62, 0.24];
+  const transmit = uniform(new Color().setRGB(tr[0], tr[1], tr[2]));
   const perTexel = texTranslucency ? texture(texTranslucency).r : float(1);
   mat.thicknessColorNode = perTexel.mul(attribute('aThickness', 'float')).mul(transmit);
   mat.thicknessDistortionNode = uniform(0.3);
@@ -179,7 +195,7 @@ export function makeFoliageMaterial(assets, cfg) {
   // the standard KHR_materials_diffuse_transmission extension (leaf transmission).
   mat.userData.gltfDiffuseTransmission = {
     factor: 1.0,
-    color: [0.42, 0.62, 0.24],
+    color: tr,
     map: texTranslucency ?? null,
   };
   return { material: mat, centerUniform, tintNode, tintAmount };
@@ -187,6 +203,8 @@ export function makeFoliageMaterial(assets, cfg) {
 
 export function buildFoliage(terminalStems, cfg, rng, material, centerUniform) {
   let c = { ...DEFAULTS, ...cfg };
+  const hangingSprays = c.mode === 'hangingSprays';
+  const willowCurtains = c.mode === 'willowCurtains';
   if (c.mode === 'clusters') {
     // Cluster sprays ride the EXACT same placement grammar as single leaves —
     // same branch-frame anchoring, down-angle, phyllotaxy, droop — just fewer,
@@ -198,7 +216,9 @@ export function buildFoliage(terminalStems, cfg, rng, material, centerUniform) {
       size: c.clusterSize,
       sizeVar: c.clusterSizeVar,
       quads: c.clusterQuads,
-      startFrac: 0.35,   // sprays cover the leafy zone, not the bare branch base
+      // Sprays cover the leafy zone, not the bare branch base — but a species
+      // may pull them lower (desert shrubs sleeve foliage down their wands).
+      startFrac: cfg.startFrac ?? 0.35,
       taper: 0.25,       // tip sprays only slightly smaller
       widthRatio: 1.0,   // the spray texture is square
     };
@@ -217,8 +237,11 @@ export function buildFoliage(terminalStems, cfg, rng, material, centerUniform) {
   // every leaf below it gets a downward dome normal that no up-bias can save —
   // the black-underside bug.
   if (centerUniform) centerUniform.value.set(center.x, Math.min(minY - 0.5, center.y - 1), center.z);
+  if (willowCurtains) {
+    return buildWillowCurtains(terminalStems, c, rng, material);
+  }
 
-  const geo = makeLeafGeometry(c.quads);
+  const geo = makeLeafGeometry(c.quads, hangingSprays);
   const count = terminalStems.length * c.leavesPerBranch;
   const windBase = new Float32Array(count);     // twig wind weight at each leaf's anchor
   const windVec = new Float32Array(count * 3);  // wind heading in instance-local space
@@ -237,16 +260,81 @@ export function buildFoliage(terminalStems, cfg, rng, material, centerUniform) {
   const pos = new Vector3();
   const scl = new Vector3();
   const n = new Vector3();
+  const guide = new Vector3();
   const droopAxis = new Vector3();
+
+  const leafWhorlSize = Math.max(1, Math.round(c.whorlSize ?? 1));
+  const leafWhorlNodes = Math.ceil(c.leavesPerBranch / leafWhorlSize);
+  const leafRotate = ((c.rotate ?? 90) * Math.PI) / 180;
+  const leafRotateV = (Math.max(0, c.rotateV ?? 0) * Math.PI) / 180;
 
   let idx = 0;
   for (const stem of terminalStems) {
     const pts = stem.points, oris = stem.orients;
     const segN = pts.length - 1;
     let phyllo = rng.range(0, Math.PI * 2);
+    let whorlFrac = 0;
+    let whorlPlane = phyllo;
+
+    if (hangingSprays) {
+      // The terminal stem is an INVISIBLE GUIDE, not renderable wood: its base is
+      // the vine attachment and its chord supplies the authored spray's direction
+      // while its arc supplies length. The baker straightens that same arc, so
+      // live and baked curtains now share an exact scale.
+      guide.copy(pts[pts.length - 1]).sub(pts[0]);
+      const chordLen = guide.length();
+      if (chordLen < 1e-4) continue;
+      guide.divideScalar(chordLen);
+      const guideLen = Math.max(chordLen, stem.length ?? chordLen);
+      q1.setFromUnitVectors(Y, guide);
+      const sprays = Math.max(0, Math.round(c.leavesPerBranch));
+      for (let i = 0; i < sprays; i++) {
+        pos.copy(pts[0]);
+        windBase[idx] = stem.winds?.[0] ?? 0.75;
+
+        // Random axial roll varies the two baked faces without changing the guide
+        // direction; both planes live in one geometry, so wind cannot tear the X.
+        q2.setFromAxisAngle(Y, rng.range(0, Math.PI * 2));
+        q.copy(q1).multiply(q2);
+        let s = guideLen * c.size * Math.max(0.2, 1 + rng.vary(0, c.sizeVar));
+        // Keep the small size variation from pushing curtain tips through ground.
+        if (c.hangFloor != null && guide.y < -0.02) {
+          s = Math.min(s, Math.max(0, (pos.y - c.hangFloor) / -guide.y));
+        }
+        if (s < 0.03) continue;
+        scl.set(s * c.widthRatio, s, s);
+
+        qInv.copy(q).invert();
+        wv.copy(WIND_DIR).applyQuaternion(qInv);
+        windVec[idx * 3] = (wv.x / scl.x) * windBase[idx];
+        windVec[idx * 3 + 1] = (wv.y / scl.y) * windBase[idx];
+        windVec[idx * 3 + 2] = (wv.z / scl.z) * windBase[idx];
+        anchorPos[idx * 3] = pos.x;
+        anchorPos[idx * 3 + 1] = pos.y;
+        anchorPos[idx * 3 + 2] = pos.z;
+        m.compose(pos, q, scl);
+        mesh.setMatrixAt(idx++, m);
+      }
+      continue;
+    }
 
     for (let i = 0; i < c.leavesPerBranch; i++) {
-      const frac = c.startFrac + (1 - c.startFrac) * ((i + rng.next()) / c.leavesPerBranch);
+      const whorlSlot = i % leafWhorlSize;
+      let frac;
+      let leafRoll = phyllo;
+      if (leafWhorlSize > 1) {
+        const nodeIndex = Math.floor(i / leafWhorlSize);
+        if (whorlSlot === 0) {
+          whorlFrac = c.startFrac
+            + (1 - c.startFrac) * ((nodeIndex + rng.next()) / leafWhorlNodes);
+          whorlPlane += leafRotate + rng.vary(0, leafRotateV);
+        }
+        frac = whorlFrac;
+        leafRoll = whorlPlane + (Math.PI * 2 * whorlSlot) / leafWhorlSize;
+      } else {
+        // Keep the legacy path (and its exact RNG sequence) untouched.
+        frac = c.startFrac + (1 - c.startFrac) * ((i + rng.next()) / c.leavesPerBranch);
+      }
       const fseg = Math.min(segN - 1, Math.floor(frac * segN));
       const ft = frac * segN - fseg;
       pos.copy(pts[fseg]).lerp(pts[fseg + 1], ft);
@@ -267,10 +355,14 @@ export function buildFoliage(terminalStems, cfg, rng, material, centerUniform) {
         : 0.9;
 
       // qLeaf = frame · phyllo(about tangent Y) · downAngle(about X)
-      phyllo += GOLDEN + rng.vary(0, 0.3);
+      if (leafWhorlSize > 1) {
+        q2.setFromAxisAngle(Y, leafRoll);
+      } else {
+        phyllo += GOLDEN + rng.vary(0, 0.3);
+        q2.setFromAxisAngle(Y, phyllo);
+      }
       const down = (c.downAngle + rng.vary(0, c.downAngleV)) * Math.PI / 180;
       q1.setFromAxisAngle(X, down);
-      q2.setFromAxisAngle(Y, phyllo);
       q.copy(qFrame).multiply(q2).multiply(q1);
 
       // Gentle bend toward light (Weber-Penn LeafBend, Y-up): lift the leaf normal

@@ -1,6 +1,8 @@
 import * as THREE from 'three/webgpu';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { buildTree, makeBarkMaterial, makeCactusBarkMaterial, makeThatchBarkMaterial, forestBarkMaterial } from './core/tree.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { prepareFruitGeometry, makeFruitMaterial } from './core/fruit.js';
+import { buildTree, makeBarkMaterial, makeCactusBarkMaterial, makeThatchBarkMaterial, forestBarkMaterial, MESHQ_DEFAULT } from './core/tree.js';
 import { makeFoliageMaterial } from './core/leaf-cards.js';
 import { makeYuccaMaterial } from './core/yucca-leaves.js';
 import { makeSpineMaterial } from './core/cactus-spines.js';
@@ -9,8 +11,9 @@ import { buildTerrainArrays, buildTerrainMaterial } from './core/terrain-materia
 import { buildVolumetricClouds } from './core/clouds.js';
 import { bakeImpostor, disposeBillboard, assembleBillboardFromRawBake } from './core/impostor.js';
 import { serializeSource } from './core/bake-transfer.js';
-import { bakeBranchCards, disposeBranchCards, forestCardMaterial } from './core/branch-cards.js';
+import { bakeBranchCards, bakeRosetteCards, disposeBranchCards, forestCardMaterial } from './core/branch-cards.js';
 import { buildRocks } from './core/rocks.js';
+import { buildFallenLimbs } from './core/fallen-limbs.js';
 import { buildGrass } from './core/grass.js';
 import { buildScrub } from './core/scrub.js';
 import { windStrength, windSpeed, sunDirectionUniform, WIND_DIR } from './core/wind.js';
@@ -23,7 +26,7 @@ import { mountPanelFX } from './ui/panel-fx.js';
 import { mountAmbience } from './audio/ambience.js';
 import './ui/theme.css';
 import { fog as tslFog, positionWorld, uniform, float, pass, mrt, output, normalView, mix, vec3, vec4 } from 'three/tsl';
-import { ao } from 'three/addons/tsl/display/GTAONode.js';
+import { N8AONode } from './vendor/n8ao/N8AONode.js';
 
 const hud = document.getElementById('hud');
 const errBox = document.getElementById('err');
@@ -102,7 +105,10 @@ async function loadSpeciesAssets(species, sunLight = null) {
     loadTex(barkUrl(species.bark), true),
     opt(barkUrl(`${base}_normal.png`), false),
     opt(barkUrl(`${base}_roughness.png`), false),
-    loadTex(leafUrl(species.leaf), true),
+    // Cactus spine cards are optional detail. If their atlas is missing the
+    // spine material deliberately falls back to opaque straw-coloured cards;
+    // do not fail the entire species load before that fallback can run.
+    species.cactus ? opt(leafUrl(species.leaf), true) : loadTex(leafUrl(species.leaf), true),
     opt(leafUrl(`${leafBase}_translucency.png`), false),
     opt(leafUrl(`${leafBase}_normal.png`), false),
     opt(leafUrl(`${leafBase}_roughness.png`), false),
@@ -125,6 +131,7 @@ async function loadSpeciesAssets(species, sunLight = null) {
     assets.barkCleanNormal = barkCleanNormal;
     assets.barkCleanRoughness = barkCleanRoughness;
     assets.barkDamage = species.barkDamage ?? 0.35;
+    assets.ribsPerTile = species.params?.ribsPerTile ?? 4;
     assets.barkMat = makeCactusBarkMaterial(assets);
     // Spines = crossed alpha cards (own material). Pass the sun so the spine glow
     // samples the real cast-shadow map (body self-shadow).
@@ -137,7 +144,9 @@ async function loadSpeciesAssets(species, sunLight = null) {
   if (species.thatchBark) {
     const tb = species.thatchBark.replace('_albedo.png', '');
     const [thA, thN, thR] = await Promise.all([
-      loadTex(barkUrl(species.thatchBark), true),
+      // Thatch is an optional reduced-LOD cladding layer. The material helper
+      // already falls back to ordinary bark when the source is unavailable.
+      opt(barkUrl(species.thatchBark), true),
       opt(barkUrl(`${tb}_normal.png`), false),
       opt(barkUrl(`${tb}_roughness.png`), false),
     ]);
@@ -156,12 +165,37 @@ async function loadSpeciesAssets(species, sunLight = null) {
     assets.frondDryness = yucca.dryness;
   } else {
     // Two foliage materials: single-leaf (LOD0) and cluster (LOD1+). Cached & reused.
-    const leafFol = makeFoliageMaterial(assets, { ...species.foliage, mode: 'leaves' });
+    const directMode = species.foliage?.mode === 'willowCurtains'
+      ? 'willowCurtains' : 'leaves';
+    const leafFol = makeFoliageMaterial(assets, { ...species.foliage, mode: directMode });
     assets.leafMat = leafFol.material; assets.leafCenter = leafFol.centerUniform;
     assets.leafTintNode = leafFol.tintNode; assets.leafTintAmount = leafFol.tintAmount;
     const clusterFol = makeFoliageMaterial(assets, { ...species.foliage, mode: 'clusters' });
     assets.clusterMat = clusterFol.material; assets.clusterCenter = clusterFol.centerUniform;
     assets.clusterTintNode = clusterFol.tintNode; assets.clusterTintAmount = clusterFol.tintAmount;
+  }
+  // Fruit GLB (orchard species): Orrery-generated, retopoed + baked. Loaded
+  // once per species; geometry re-origined to the stem tip so instances hang.
+  if (species.fruit?.mesh) {
+    try {
+      const gltf = await new GLTFLoader().loadAsync(`assets/fruits/${species.fruit.mesh}`);
+      gltf.scene.updateMatrixWorld(true);
+      let src = null;
+      gltf.scene.traverse((o) => { if (o.isMesh && !src) src = o; });
+      if (src) {
+        const geo = src.geometry.clone();
+        geo.applyMatrix4(src.matrixWorld); // bake node transforms (rescale op)
+        assets.fruitGeo = prepareFruitGeometry(geo);
+        assets.fruitMat = makeFruitMaterial(src.material);
+        // Loose texture keys for the off-thread billboard bake (serializeSource
+        // ships assets.* textures by key; the worker rebuilds the material).
+        assets.fruitTexture = src.material?.map ?? null;
+        assets.fruitNormal = src.material?.normalMap ?? null;
+        assets.fruitRoughness = src.material?.roughnessMap ?? null;
+      }
+    } catch (e) {
+      console.warn('[SeedThree] fruit mesh failed to load (tree renders fruitless):', e);
+    }
   }
   assetCache.set(species.name, assets);
   return assets;
@@ -291,37 +325,24 @@ async function main() {
   scaleRef.position.set(5, 0.9, 3);
   scaleRef.visible = false;
   scene.add(scaleRef);
-  const envState = { showScaleRef: false, fog: true, forestCount: 64, spom: false, gtao: false, aa: true }; // SPOM + GTAO OFF by default; MSAA antialiasing ON
+  // Keep the historical `gtao` preset key for compatibility; the implementation
+  // behind it is now the exact locally vendored Eidoverse N8AO node.
+  const envState = { showScaleRef: false, fog: true, forestCount: 64, spom: false, gtao: false, aa: true }; // SPOM + N8AO OFF by default; MSAA ON
 
-  // ---- Post-processing: Ground-Truth Ambient Occlusion ----------------------
-  // Canonical three.js WebGPU GTAO: an MRT scene pass exposes color + view
-  // normals + depth; the GTAO node computes horizon-based occlusion which we
-  // multiply into the scene color. It grounds the tree — contact darkening in
-  // leaf clusters, branch crotches, where trunks meet terrain. Toggle sits next
-  // to SPOM (default OFF).
+  // ---- Post-processing: N8AO ------------------------------------------------
+  // Eidoverse's local uncommitted N8AO fork consumes this MRT's beauty, view
+  // normals, and depth directly, then returns beauty-with-AO-composited. Its own
+  // denoise chain avoids GTAO's depth-edge halos and temporal ghosting.
   //
-  // Two DISTINCT artifacts the far-LOD impostor/forest/cluster cards would suffer
-  // (they're flat billboards with BENT normals — rounded outward so a flat card
-  // lights like a volume):
-  //   1. BLACKOUT (whole card black) — normal-driven: the bent normals point away
-  //      from camera, so GTAO reads the surface as fully self-occluded (AO→0).
-  //   2. CREASE SHADOWS (dark X-seam) — depth-driven: AO darkens the concave
-  //      valley where the two crossed cards intersect — the very seam bent normals
-  //      exist to hide.
-  // Both are fixed the same correct way: EXCLUDE those cards from AO with a mask.
-  // The scene pass carries an extra `aomask` channel — real geometry writes 1
-  // (apply AO), the baked cards override it to 0 (see impostor.js/branch-cards.js
-  // mrtNode). The composite lerps AO→1 where mask=0, so cards keep their bent
-  // normals (no crease) and never darken (no blackout), while the hero mesh, leaf
-  // cards, bark and terrain get full real-normal AO.
+  // Flat impostor/cluster cards use bent volume normals and crossed planes. AO on
+  // those pixels creates black cards and X-seam creases, so the scene MRT carries
+  // `aomask`: real geometry writes 1; baked cards write 0. N8AO still sees one
+  // coherent scene depth/normal pass, but its composited color is accepted only
+  // where the receiver mask is 1.
   //
-  // The scene ALWAYS renders through the pipeline (never a direct canvas render):
-  // that keeps the card materials' 3-target MRT output in an MRT context, so the
-  // GTAO-off path can't hit a single-target mismatch (which would drop the cards).
-  // The toggle just swaps the pipeline's output node (AO composite vs plain
-  // color) — flipping it recompiles once. RenderPipeline applies tone mapping +
-  // color space at output, so the pass renders linear HDR and our ACES grade
-  // still lands once at the end.
+  // The scene always renders through this pipeline, even with N8AO disabled, so
+  // card materials never encounter a single-target/MRT mismatch. Tone mapping and
+  // color conversion remain owned by RenderPipeline and happen exactly once.
   const postProcessing = new THREE.RenderPipeline(renderer);
   const scenePass = pass(scene, camera);
   scenePass.setMRT(mrt({ output, normal: normalView, aomask: float(1) })); // default 1: real geo gets AO
@@ -329,14 +350,34 @@ async function main() {
   const scenePassNormal = scenePass.getTextureNode('normal');
   const scenePassDepth = scenePass.getTextureNode('depth');
   const aoMask = scenePass.getTextureNode('aomask'); // 1 = apply AO, 0 = card (skip)
-  const aoPass = ao(scenePassDepth, scenePassNormal, camera);
-  aoPass.resolutionScale = 0.5; // half-res AO: plenty for foliage, ~4× cheaper
-  aoPass.radius.value = 0.5;    // meters — contact radius across leaf clusters/crotches
-  aoPass.distanceExponent.value = 1.0;
-  // Card pixels (mask 0) → AO forced to 1 (no darkening); real geo (mask 1) → real AO.
-  const aoFactor = mix(float(1), aoPass.getTextureNode().r, aoMask.r);
-  // AO factor is a scalar — broadcast to rgb (keep alpha) before multiplying.
-  const AO_OUTPUT = scenePassColor.mul(vec4(vec3(aoFactor), 1));
+  const aoPass = new N8AONode({
+    beautyNode: scenePassColor,
+    beautyTexture: scenePass.getTexture('output'),
+    depthNode: scenePassDepth,
+    depthTexture: scenePass.getTexture('depth'),
+    normalNode: scenePassNormal,
+    normalTexture: scenePass.getTexture('normal'),
+    scene,
+    camera,
+    // Deliberately omit scenePassNode: scenePassColor + aoMask remain direct
+    // output-graph dependencies here, so the pass is already scheduled once per
+    // frame. Supplying it would manually render the same scene a second time.
+  });
+  // Match Eidoverse's linear full-resolution path. SeedThree's trees need a
+  // tighter world radius and gentler intensity than Eidoverse's scene default.
+  aoPass.configuration.halfRes = false;
+  aoPass.configuration.gammaCorrection = false;
+  // Card transparency is already handled by the scene MRT's aomask. Disable
+  // N8AO's automatic transparency passes so foliage does not trigger two extra
+  // scene renders or bypass the explicit card exclusion on its first live frame.
+  aoPass.configuration.transparencyAware = false;
+  aoPass.autoDetectTransparency = false;
+  aoPass.setQualityMode('Medium');
+  aoPass.configuration.aoRadius = 0.5;
+  aoPass.configuration.distanceFalloff = 1.0;
+  aoPass.configuration.intensity = 2.5;
+  // Card pixels use untouched beauty; real receivers use N8AO's composited beauty.
+  const AO_OUTPUT = mix(scenePassColor, aoPass.getTextureNode(), aoMask.r);
   const setAOOutput = () => { // swap composite on toggle (one-time recompile)
     postProcessing.outputNode = envState.gtao ? AO_OUTPUT : scenePassColor;
     postProcessing.needsUpdate = true;
@@ -345,7 +386,7 @@ async function main() {
   // Always render through the pipeline (see note above); the toggle only changes
   // which output node is composited, never the render path.
   const renderFrame = () => postProcessing.render();
-  // Antialiasing toggle (Environment, like SPOM/GTAO). Because the scene now
+  // Antialiasing toggle (Environment, like SPOM/N8AO). Because the scene now
   // always renders into the pipeline's pass, MSAA lives on that pass — it inherits
   // the renderer's `antialias: true` (4 samples) by default. Toggling flips the
   // pass's sample count, recreates its render target at the new count, and rebuilds
@@ -478,6 +519,24 @@ async function main() {
       seed: state.controls.seed, flatRadius: 15,
       count: (species.biome ?? 'temperate') === 'desert' ? 44 : 32,
     }));
+    // Fallen limbs: dead branch pieces resting on the terrain (species bark,
+    // own static material — no wind on grounded wood). Bark maps are loaded
+    // directly: buildBiome runs BEFORE the species asset pipeline on a switch,
+    // and the loader caches by URL so this costs nothing once assets land.
+    {
+      const limbBase = species.bark.replace('_albedo.png', '');
+      const [limbA, limbN, limbR] = await Promise.all([
+        loadTex(barkUrl(species.bark), true).catch(() => null),
+        loadTex(barkUrl(`${limbBase}_normal.png`), false).catch(() => null),
+        loadTex(barkUrl(`${limbBase}_roughness.png`), false).catch(() => null),
+      ]);
+      const limbs = buildFallenLimbs({
+        barkTexture: limbA, barkNormal: limbN, barkRoughness: limbR,
+        sampler, seed: state.controls.seed, flatRadius: 15,
+        count: isDesert ? 10 : 16,
+      });
+      if (limbs) group.add(limbs);
+    }
     if (!isDesert) {
       const [tuftTexture, tuftNormal, tuftRoughness] = await Promise.all([
         loadTex(leafUrl('grass_tuft.png'), true),                       // foliage cards live in assets/leaves/ now
@@ -491,7 +550,7 @@ async function main() {
       // cards (skipped gracefully until Codex paints them).
       const scrubDefs = [
         { base: 'sagebrush',  tint: [0.62, 0.68, 0.52], height: 0.55, share: 1.1, quads: 9, transmit: [0.32, 0.40, 0.20] }, // silver-green, rounded
-        { base: 'blackbrush', tint: [0.48, 0.49, 0.42], height: 0.48, share: 1.0, quads: 8, transmit: [0.24, 0.30, 0.16] }, // dark grey-green, twiggy
+        { base: 'blackbrush', tint: [0.40, 0.42, 0.47], height: 0.48, share: 1.0, quads: 8, transmit: [0.20, 0.22, 0.20] }, // dormant slate-grey (measured vs reference), twiggy
         { base: 'creosote',   tint: [0.50, 0.62, 0.40], height: 0.80, share: 0.9, quads: 7, transmit: [0.30, 0.44, 0.18] }, // olive, taller/open
       ];
       const shrubs = await Promise.all(scrubDefs.map(async (d) => ({
@@ -531,7 +590,8 @@ async function main() {
   // Optimization panel: LOD preview/forcing, switch distances, billboard bake.
   // Defaults keep the stock camera framing (~29m) inside LOD0 hero quality.
   const optState = {
-    preview: 'auto', meshQuality: 1,
+    preview: 'auto', meshQuality: MESHQ_DEFAULT, // branch/trunk dial — default ≈ 10k mobile near, 1.0 ≈ 13k
+    lod0Density: 1,                   // mobile-near rosette density (rosette species, mobile perf only)
     lod1Dist: 35, lod2Dist: 70, billboardDist: 120,
     lod1Pct: 50, lod2Pct: 15,         // triangle budgets as % of LOD0 (solved for)
     lod1Density: 1, lod1Prune: 0,     // look dials (budget compensates)
@@ -577,25 +637,60 @@ async function main() {
   // FIXED exemplar seed inside bakeBranchCards, so reseeding reuses the cache.
   const cardCache = new Map();
   async function ensureBranchCards(species, shaped) {
-    if (species.foliageType === 'rosette') return null; // real geometry at every LOD
+    if (species.foliageType === 'rosette') {
+      // Rosette species use real geometry at every DESKTOP LOD. In MOBILE mode the
+      // far rung replaces terminal rosette arms with 4-way crossed cards (8 tris
+      // per arm) — bake that terminal-arm exemplar set here. Cactus has no
+      // rosettes to bake (its ladder is ribs/spines only).
+      if (!optState.mobileTarget || species.cactus || species.foliage === false) return null;
+      // The bake contains an exemplar arm tube as well as its crown. Include
+      // every shaped skeleton/foliage input so edits cannot reuse stale cards.
+      const bakeShape = JSON.stringify({ params: shaped.params, foliage: shaped.foliage });
+      const key = `${species.name}|rosette|${bakeShape}|${optState.cardRes}|${optState.cardVariants}`;
+      let cards = cardCache.get(key);
+      if (cards) return cards;
+      const assets = assetCache.get(species.name);
+      baking = true;
+      try {
+        cards = await bakeRosetteCards(renderer, shaped, assets, { size: optState.cardRes, variants: optState.cardVariants });
+      } catch (e) {
+        console.error('[SeedThree] rosette card bake failed:', e);
+        cards = null;
+      } finally {
+        baking = false;
+      }
+      if (!cards) return null; // far rung falls back to sparse cones
+      cardCache.set(key, cards);
+      if (cardCache.size > 6) {
+        const [oldKey, old] = cardCache.entries().next().value;
+        if (oldKey !== key) { cardCache.delete(oldKey); disposeBranchCards(old); }
+      }
+      return cards;
+    }
     if (!shaped.foliage || (shaped.foliage.leavesPerBranch ?? 1) <= 0) return null;
     // Mobile bakes EXTRA whole-limb card sets (its LOD3/LOD4 collapse limbs into
     // cards), so the toggle keys its own cache entry.
-    const key = `${species.name}|${shaped.foliage.size}|${shaped.foliage.leavesPerBranch}|${shaped.params.levels}|${optState.cardRes}|${optState.cardVariants}|${optState.mobileTarget ? 'm' : 'd'}`;
+    const bakeShape = JSON.stringify({ params: shaped.params, foliage: shaped.foliage, guideLevel: shaped.guideLevel ?? null, terminalStemsAreGuides: !!shaped.terminalStemsAreGuides });
+    const key = `${species.name}|${bakeShape}|${optState.cardRes}|${optState.cardVariants}|${optState.mobileTarget ? 'm' : 'd'}`;
     let cards = cardCache.get(key);
     if (cards) return cards;
     const assets = assetCache.get(species.name);
     // Card sets to bake, keyed `level:content` (mirrors the rungs in tree.js
-    // lodLevels). Hybrid keepTwigs levels need FOLIAGE-ONLY per-twig cards (the
-    // real tubes render — a tube in the card doubles every twig); collapse levels
-    // need the full twig+leaves content. Desktop's hybrid LOD2 uses only the fol
-    // set; mobile adds the two collapse sets (per-twig full + one-level-up limbs).
+    // lodLevels). Desktop and mobile share one foliage-only terminal set; nested
+    // stable subsets and progressively cheaper real tubes build the mobile curve.
     const maxLevel = (shaped.params.levels ?? 3) - 1;
-    const jobs = [{ level: maxLevel, foliageOnly: true }];
-    if (optState.mobileTarget) {
-      jobs.push({ level: maxLevel, foliageOnly: false });
-      jobs.push({ level: Math.max(1, maxLevel - 1), foliageOnly: false });
-    }
+    const willowCurtains = shaped.foliage?.mode === 'willowCurtains';
+    // Willow has one reusable foliage-only set per real terminal feeder. Each
+    // bake contains all of that feeder's direct curved vines, and every ladder
+    // rung merely chooses front+side or front-only placement.
+    const jobs = willowCurtains
+      ? [{ level: maxLevel, foliageOnly: true, gravityAligned: true, crossViews: true, noFlutter: true }]
+      : [{
+        level: maxLevel,
+        foliageOnly: true,
+        crossViews: !!shaped.crossedLod2Cards,
+        noFlutter: !!shaped.crossedLod2Cards,
+      }];
     baking = true; // the bake re-targets the renderer — pause the main loop
     const byLevel = new Map();
     try {
@@ -605,8 +700,12 @@ async function main() {
         const set = await bakeBranchCards(renderer, shaped, assets, {
           size: optState.cardRes, variants: optState.cardVariants,
           cardLevel: job.level, foliageOnly: job.foliageOnly,
-          // Limb-level sets place as crossed pairs — no flutter (it tears the pair).
-          noFlutter: job.level < maxLevel,
+          // Limb-level sets place as crossed pairs — no flutter (it tears the
+          // pair), and bake a REAL side view so the two cards agree at the seam
+          // (single-view twins showed gaps where branches cross the other plane).
+          noFlutter: job.noFlutter ?? job.level < maxLevel,
+          crossViews: job.crossViews ?? job.level < maxLevel,
+          gravityAligned: !!job.gravityAligned,
         });
         if (set) byLevel.set(jobKey, set);
       }
@@ -615,8 +714,17 @@ async function main() {
     } finally {
       baking = false;
     }
-    const near = byLevel.get(`${maxLevel}:fol`) ?? byLevel.get(`${maxLevel}:full`);
-    if (!near) return null; // no usable cards → fall back to cluster foliage
+    // A partial mobile bake is unsafe: per-level lookup fallbacks can make the
+    // facade and a byLevel entry refer to the same geometry through different
+    // wrapper identities, defeating repeat-placement clone tracking. Require
+    // every exact requested set; otherwise dispose what succeeded and use the
+    // renderer-free cluster fallback for the whole ladder.
+    const expectedKeys = new Set(jobs.map((job) => `${job.level}:${job.foliageOnly ? 'fol' : 'full'}`));
+    if ([...expectedKeys].some((jobKey) => !byLevel.has(jobKey))) {
+      if (byLevel.size) disposeBranchCards({ byLevel });
+      return null;
+    }
+    const near = byLevel.get(`${maxLevel}:fol`);
     // Facade: byLevel drives the LOD builder; variants/centerUniform alias the
     // near per-twig set for the forest rebinner + billboard bake (back-compat).
     cards = { byLevel, variants: near.variants, centerUniform: near.centerUniform };
@@ -696,6 +804,7 @@ async function main() {
         && currentTree.userData?.mobileBuilt === optState.mobileTarget) ? currentTree : null; // toggling mobile changes LOD distances → fresh build
       const { group } = buildTree(shaped, state.controls.seed, assets, {
         lod1Dist: optState.lod1Dist, lod2Dist: optState.lod2Dist, meshQuality: optState.meshQuality,
+        lod0Density: optState.lod0Density,
         lod1Pct: optState.lod1Pct, lod2Pct: optState.lod2Pct,
         lod1Density: optState.lod1Density, lod1Prune: optState.lod1Prune,
         lod2Density: optState.lod2Density, lod2Prune: optState.lod2Prune,
@@ -839,9 +948,9 @@ async function main() {
       tree.remove(old);
       if (old !== groveBillboard) disposeBillboard(old); // grove still shares this one — leave it alive
     }
-    // Billboard (LOD3) threshold rides the same framing-relative scale as the
-    // other levels (set in frameCameraToTree) so it never pops in while framed.
-    const bbDist = tree.userData.lodBaseDist ? tree.userData.lodBaseDist * 5.5 : optState.billboardDist;
+    // frameCameraToTree writes its computed threshold back to optState, so the
+    // bake, HUD, slider, and later same-species rebuilds share one source of truth.
+    const bbDist = optState.billboardDist;
     tree.addLevel(bb, bbDist, 0.05);
     applyLodMobile(tree); // mobile: re-park hidden LODs + set BB to billboardDist after the new level shuffles the order
     billboardDirty = false; // impostor now matches the current plant
@@ -886,22 +995,34 @@ async function main() {
     _frameDir.set(Math.cos(az) * Math.cos(el), Math.sin(el), Math.sin(az) * Math.cos(el)).normalize();
     controls.target.copy(_frameCenter);
     camera.position.copy(_frameCenter).addScaledVector(_frameDir, dist);
-    // Make the LOD switch distances RELATIVE to this framing so the DEFAULT view
-    // always shows full-detail LOD0 (absolute thresholds made big trees frame past
-    // the LOD1 cutoff and render as cards). Scale off the real camera→tree-origin
-    // distance; the billboard (LOD3, baked later) reads back lodBaseDist.
+    // Derive first-load/species-switch thresholds from the fitted view, then
+    // persist those exact metres back into optState. Previously the live LOD used
+    // hidden multipliers while the sliders showed stale values, and the next
+    // same-species rebuild silently jumped back to those stale absolutes.
     tree.getWorldPosition(_frameOrigin);
     const baseDist = camera.position.distanceTo(_frameOrigin);
     tree.userData.lodBaseDist = baseDist;
+    // A first load/species switch establishes species-scaled defaults in both
+    // desktop and mobile modes. Subsequent same-species edits still preserve the
+    // user's absolute sliders because frameCameraToTree is not called for them.
+    const mult = SPECIES[state.speciesKey]?.lodDistanceMultipliers
+      ?? { lod1: 1.5, lod2: 3.0, billboard: 5.5 };
+    optState.lod1Dist = Math.round(baseDist * mult.lod1);
+    optState.lod2Dist = Math.max(optState.lod1Dist + 5, Math.round(baseDist * mult.lod2));
+    optState.billboardDist = Math.max(
+      optState.lod2Dist + 10, Math.round(baseDist * mult.billboard),
+    );
     if (optState.mobileTarget && isMobileTree(tree)) {
-      // Mobile uses ABSOLUTE slider distances (not framing-relative) so the
-      // Optimization sliders stay meaningful; park hidden LODs + place the cards.
-      tree.userData.lodBaseDist = 0; // billboard bake reads billboardDist, not baseDist*5.5
       applyLodMobile(tree);
     } else {
-      const LOD_MULT = [0, 1.5, 3.0, 5.5];
-      tree.levels.forEach((lv, i) => { if (i < LOD_MULT.length) lv.distance = LOD_MULT[i] * baseDist; });
+      for (const lv of tree.levels) {
+        const name = lv.object.userData.lodName;
+        if (name === 'LOD1') lv.distance = optState.lod1Dist;
+        else if (name === 'LOD2') lv.distance = optState.lod2Dist;
+        else if (name === 'BB') lv.distance = optState.billboardDist;
+      }
     }
+    syncFromState();
     controls.update();
   }
 
@@ -1019,6 +1140,14 @@ async function main() {
     const lod2Set = { branches: null, cards: [] };
     for (const child of lod2.children) {
       if (child.isMesh && !child.isInstancedMesh) {
+        // ONLY the bark skeleton gets a forest twin. "Any plain Mesh" also
+        // caught the cactus SPINE mesh (the mobile near rung keeps spines):
+        // the last mesh won the `branches` bucket — the grove rebinned as
+        // floating spines — while the bark twin sat orphaned at the origin
+        // with identity instance matrices (the phantom saguaro at the scene
+        // centre). Spines are hero-only near detail; the grove goes without,
+        // exactly as the desktop grove always has (desktop LOD2 spines = 0).
+        if (lod2.userData.barkMesh && child !== lod2.userData.barkMesh) continue;
         // Branch skeleton bucket (matrices filled by rebinForest). The hero
         // bark material's wind runs in tree space, but instanced offsets get
         // slot-rotated afterward (see the pipeline note in wind.js) — so the
@@ -1070,8 +1199,9 @@ async function main() {
           // Card foliage needs the dome-normal forest twin.
           const fmat = cardsMesh.userData.shareMaterial ? cardsMesh.material : forestCardMaterial(cardsMesh.material);
           const im = new THREE.InstancedMesh(geo, fmat, total);
-          im.castShadow = true;
-          im.receiveShadow = true;
+          // Preserve specialized proxy-card policies (notably willow sheets).
+          im.castShadow = cardsMesh.castShadow;
+          im.receiveShadow = cardsMesh.receiveShadow;
           im.frustumCulled = false;
           im.userData.src = cardsMesh;
           im.userData.k = k;
@@ -1254,7 +1384,7 @@ async function main() {
     onSun: () => updateSun(),
     onScaleRef: (v) => { scaleRef.visible = v; },
     onFog: () => applyFog(),
-    onGtao: () => setAOOutput(), // swap composite (AO vs plain color) + recompile once
+    onGtao: () => setAOOutput(), // legacy state key; swaps N8AO vs plain beauty
     onAA: () => applyAA(),       // toggle MSAA on the scene pass
     windState,
     onWind: () => applyWind(),
@@ -1378,7 +1508,7 @@ async function main() {
         if (vis[idx]) vis[idx].object.visible = true;
       }
     }
-    renderFrame(); // GTAO post-pass or direct; billboard bake is OFF-THREAD (worker) → viewer paints every frame
+    renderFrame(); // N8AO or plain beauty; billboard bake is off-thread
   });
 
   Object.assign(window, { THREE, scene, camera, renderer, state, optState, envState, postProcessing, aoPass, scenePass, setAOOutput, applyAA, assetCache, rebuild: () => { needsRebuild = true; }, _rebuildNow: rebuild, applyPreset });
