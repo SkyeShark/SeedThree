@@ -15,18 +15,19 @@ A fully procedural tree and plant generator: pick a species, tune its parameters
 ![SeedThree — a procedurally generated White Oak tree with the live control panel showing shape, foliage, and advanced branch tuning](docs/media/hero_temperate.png)
 ![SeedThree — a procedurally generated Joshua tree in the desert with the live control panel showing shape, foliage, and LOD parameters](docs/media/hero.png)
 
-> **Status: `v0.1.0-alpha`.** Fifteen species, full LOD + export pipeline, and a living scene are in — but it's early and rough in places. Expect sharp edges.
+> **Status: `v0.1.0-alpha`.** Twenty species, full LOD + export pipeline, and a living scene are in — but it's early and rough in places. Expect sharp edges.
 
 ## What's in it
 
-- **Fifteen species across two biomes**
-  - *Temperate:* White Oak · Red Maple · Tulip Poplar · Sweetgum · American Beech · Ponderosa Pine · Loblolly Pine · Douglas Fir · Paper Birch · Quaking Aspen · American Sycamore · Flowering Dogwood · Weeping Willow
-  - *Desert:* Joshua Tree · Saguaro
-- **Two generators.** A [Weber–Penn](https://courses.cs.duke.edu/fall02/cps124/resources/p119-weber.pdf) parametric model for broadleaves & conifers, and a from-scratch dichotomous [L-system](https://en.wikipedia.org/wiki/L-system) for the desert succulents (merged-tube mesh, rib crests, areole spines).
+- **Twenty species across two biomes**
+  - *Temperate:* White Oak · Red Maple · Tulip Poplar · Sweetgum · American Beech · Ponderosa Pine · Loblolly Pine · Douglas Fir · Cultivated Apple · Sweet Cherry · Paper Birch · Quaking Aspen · American Sycamore · Flowering Dogwood · Weeping Willow
+  - *Desert:* Joshua Tree · Saguaro · Creosote Bush · Blackbrush · Big Sagebrush
+- **Two generators.** A [Weber–Penn](https://courses.cs.duke.edu/fall02/cps124/resources/p119-weber.pdf) parametric model for broadleaves & conifers, and a from-scratch dichotomous [L-system](https://en.wikipedia.org/wiki/L-system) for the desert plants — succulents (merged-tube mesh, rib crests, areole spines) and multi-stem shrubs (root-crown stem splay, spray-card foliage).
+- **Real fruit.** The orchard species hang actual fruit meshes (AI-generated, retopoed, and rebaked down to game weight) from their fruiting twigs — gravity-oriented instances with anti-clip placement, present at every LOD: real geometry near, baked into the branch cards and billboard far.
 - **Real morphology.** Each species' branch angles, taper, gnarl, and crown shape are dialed to reference photos, not generic defaults.
 - **Foliage as cards.** Base-anchored single leaves, needle sprays, and top-anchored hanging vines with backlit translucency (Barré-Brisebois SSS), dome-normal canopy shading, and per-instance wind.
 - **LOD chain + impostors.** LOD0 full geometry → reduced-geometry LOD1 → baked branch-card LOD2 → a 2-plane billboard impostor, baked off-thread in a Web Worker so the viewer never stalls. Per-LOD density & branch-prune dials.
-- **A living scene.** Instanced forest ring with per-instance LOD, wind-animated grass & desert scrub, procedural rocks, PBR terrain with slope/height material blending, volumetric-ish clouds, and a movable sun.
+- **A living scene.** Instanced forest ring with per-instance LOD, wind-animated grass & desert scrub, procedural rocks, fallen dead limbs resting on the terrain, PBR terrain with slope/height material blending, volumetric-ish clouds, and a movable sun.
 - **Ambient audio.** Per-biome wind bed (seamless loop) + randomly interspersed bird calls, with a mute toggle.
 - **glTF export.** One click writes a `.glb` with merged per-LOD meshes and standard `KHR_materials_*` extensions (incl. leaf transmission).
 
