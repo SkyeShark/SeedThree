@@ -13,6 +13,7 @@ import { buildYuccaFoliage } from './yucca-leaves.js';
 import { generateDichotomous, buildMergedMesh } from './dichotomous.js';
 import { buildCactusSpines } from './cactus-spines.js';
 import { buildFruits } from './fruit.js';
+import { buildFernTree } from './fern.js';
 
 // Branch/trunk mesh-quality slider: the DEFAULT position, used as the
 // normalization anchor everywhere the slider is consumed. At the default the
@@ -709,6 +710,7 @@ function lodLevels(species, opts = {}) {
  * @returns {{ group: LOD, stems: Array, tips: Array }}
  */
 export function buildTree(species, seed, assets = {}, lodOpts = {}, reuse = null) {
+  if (species.foliageType === 'fern') return buildFernTree(species, seed, assets, lodOpts);
   // Dichotomous/rosette plants (Joshua tree, yuccas, saguaro) use their own
   // from-scratch generator — see docs/dichotomous-generator.md. `reuse` (an
   // existing same-species LOD) rewrites its meshes in place to dodge the WebGPU
