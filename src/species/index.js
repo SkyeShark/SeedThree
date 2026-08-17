@@ -11,6 +11,7 @@ import { loblolly } from './loblolly.js';
 import { douglasFir } from './douglas-fir.js';
 import { apple } from './apple.js';
 import { cherry } from './cherry.js';
+import { bilberry } from './bilberry.js';
 import { paperBirch } from './paper-birch.js';
 import { quakingAspen } from './quaking-aspen.js';
 import { americanSycamore } from './american-sycamore.js';
@@ -31,6 +32,7 @@ export const SPECIES = {
   douglasFir,
   apple,
   cherry,
+  bilberry,
   paperBirch,
   quakingAspen,
   americanSycamore,
