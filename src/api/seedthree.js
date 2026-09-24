@@ -34,6 +34,7 @@ import {
   buildTree, makeBarkMaterial, makeCactusBarkMaterial, makeThatchBarkMaterial, individualizePalm,
 } from '../core/tree.js';
 import { makeFoliageMaterial } from '../core/leaf-cards.js';
+import { makeAtlasFruitGeometry, makeAtlasFruitGeometryLow } from '../core/fruit.js';
 import { makeYuccaMaterial } from '../core/yucca-leaves.js';
 import { makeSpineMaterial } from '../core/cactus-spines.js';
 import { generateSkeleton } from '../core/weber-penn.js';
@@ -403,6 +404,12 @@ function composeMaterials(sp, assets, sunLight = null) {
     const clusterFol = makeFoliageMaterial(assets, { ...sp.foliage, mode: 'clusters' });
     assets.clusterMat = clusterFol.material; assets.clusterCenter = clusterFol.centerUniform;
     assets.clusterTintNode = clusterFol.tintNode; assets.clusterTintAmount = clusterFol.tintAmount;
+  }
+  // Atlas fruit rides the leaf material (main.js twin) — it grows headless too.
+  if (sp.fruit?.atlas && assets.leafMat) {
+    assets.fruitGeo = makeAtlasFruitGeometry(sp.fruit);
+    assets.fruitGeoLow = makeAtlasFruitGeometryLow(sp.fruit);
+    assets.fruitMat = assets.leafMat;
   }
   return assets;
 }

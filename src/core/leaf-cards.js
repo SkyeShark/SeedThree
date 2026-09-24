@@ -12,7 +12,7 @@ import {
   BufferGeometry, BufferAttribute, InstancedBufferAttribute, InstancedMesh, MeshSSSNodeMaterial,
   Matrix4, Quaternion, Vector3, Color, DoubleSide,
 } from 'three/webgpu';
-import { positionWorld, normalView, mix, normalize, uniform, texture, attribute, float, normalMap, cameraViewMatrix, vec3, vec4, luminance, color } from 'three/tsl';
+import { positionWorld, normalView, mix, normalize, uniform, texture, attribute, float, normalMap, cameraViewMatrix, vec3, vec4, luminance, color, Fn, uv, fwidth, log2, max, interleavedGradientNoise, screenCoordinate, materialAlphaTest } from 'three/tsl';
 import { foliageWindPosition, WIND_DIR } from './wind.js';
 import { buildWillowCurtains } from './willow-curtains.js';
 
@@ -34,13 +34,20 @@ const GOLDEN = (137.5 * Math.PI) / 180;
 // Hanging sprays still extend along local +Y (so flutter grows away from their
 // attachment), but reverse V: the authored vine attaches at the IMAGE TOP.
 // `quads=2` adds a second quad rotated 90° about the length axis for volume.
-function makeLeafGeometry(quads = 2, topAnchored = false) {
+// `uvRect` [u0,v0,u1,v1] maps the card onto ONE piece of a leaf ATLAS (leaf +
+// fruit skin + flowers in one texture; see scripts/texture/compose-leaf-atlas.mjs).
+// null = the whole texture (default).
+function makeLeafGeometry(quads = 2, topAnchored = false, uvRect = null) {
   const positions = [], normals = [], uvs = [], indices = [];
   const base = [[-0.5, 0], [0.5, 0], [0.5, 1], [-0.5, 1]];
   // v = y so the leaf's petiole (image bottom) sits at the quad base (the twig).
-  const uv = topAnchored
+  let uv = topAnchored
     ? [[0, 1], [1, 1], [1, 0], [0, 0]]
     : [[0, 0], [1, 0], [1, 1], [0, 1]];
+  if (uvRect) {
+    const [u0, v0, u1, v1] = uvRect;
+    uv = uv.map(([u, v]) => [u0 + u * (u1 - u0), v0 + v * (v1 - v0)]);
+  }
   let b = 0;
   for (let q = 0; q < quads; q++) {
     const a = (q * Math.PI) / quads; // 0, 90°, ...
@@ -165,6 +172,15 @@ export function makeFoliageMaterial(assets, cfg) {
   const domeView = cameraViewMatrix.mul(vec4(domeWorld, 0)).xyz.normalize();
   const relief = texNormal ? normalMap(texture(texNormal)).sub(normalView) : float(0);
   mat.normalNode = normalize(domeView.add(relief.mul(0.9)));
+  if (c.atlasFruit) {
+    // Atlas fruit (fruit.js makeAtlasFruitGeometry) shares this material (no
+    // separate fruit material). Fruit is SOLID geometry: it carries a
+    // per-vertex aThickness of 0 (leaf cards draw 0.4–1 per instance), which
+    // selects its true geometric normal instead of the canopy dome — and zeroes
+    // its SSS transmission (thickness colour ∝ aThickness) and flutter.
+    const solid = float(1).sub(attribute('aThickness', 'float').mul(20).clamp(0, 1));
+    mat.normalNode = normalize(mix(mat.normalNode, normalView, solid));
+  }
   // Willow curtains are one tree-space merged mesh. Their per-ring sway bends
   // the long vines; instanced-leaf local-Y flutter is intentionally disabled.
   // Palm fronds are one merged, atlas-mapped mesh too (frond-builder.js).
@@ -191,6 +207,36 @@ export function makeFoliageMaterial(assets, cfg) {
   mat.thicknessAttenuationNode = uniform(1.0);
   mat.thicknessPowerNode = uniform(6.0);
   mat.thicknessScaleNode = uniform(3.0);
+  // Opt-in see-through crowns (tamarisk): a canopy of thread-thin branchlets
+  // passes light, but alpha-tested cards cast shadow-map blobs at the coarse
+  // mips, so the interior self-shadows into dark opaque cores.
+  //  - selfShadowFloor: received shadow never darkens below this fraction.
+  //  - shadowAlphaCut: only texels at least this opaque CAST shadow (sparser,
+  //    speckled shadow instead of a solid card silhouette).
+  // Both default off → every other species' material is unchanged.
+  if (c.selfShadowFloor != null) {
+    const floor = uniform(c.selfShadowFloor);
+    mat.receivedShadowNode = Fn(([shadow]) => shadow.mul(float(1).sub(floor)).add(floor));
+  }
+  if (c.shadowAlphaCut != null && tex) {
+    mat.maskShadowNode = texture(tex).a.greaterThan(uniform(c.shadowAlphaCut));
+  }
+  //  - alphaDitherMip: past this texture mip level the alpha test fades from
+  //    the fixed cutoff to a screen-space dither, so a card of thread-thin
+  //    branchlets covers ≈ its MEAN alpha at range (a fine haze) instead of the
+  //    solid lobed silhouette its averaged far mips pass at a fixed cutoff.
+  //    alphaDitherRange [lo, hi] = the dithered threshold's span (a lower hi
+  //    keeps a far crown fuller: coverage ≈ min(1, alpha / hi)).
+  //    Render-only: `alphaTest` stays the exported glTF MASK cutoff.
+  if (c.alphaDitherMip != null && tex) {
+    const texels = uv().mul(float(tex.image?.width ?? 2048));
+    const fw = fwidth(texels);
+    const mip = log2(max(fw.x, fw.y).max(1e-4));
+    const w = mip.sub(c.alphaDitherMip).clamp(0, 1);
+    const [lo, hi] = c.alphaDitherRange ?? [0.05, 0.95];
+    const dither = interleavedGradientNoise(screenCoordinate.xy).mul(hi - lo).add(lo);
+    mat.alphaTestNode = mix(materialAlphaTest, dither, w); // near: the live Alpha-test slider
+  }
   // Carry the translucency data for glTF export: our live SSS is a custom TSL node
   // that GLTFExporter can't serialize, so the export-glb plugin reads this to write
   // the standard KHR_materials_diffuse_transmission extension (leaf transmission).
@@ -242,7 +288,7 @@ export function buildFoliage(terminalStems, cfg, rng, material, centerUniform) {
     return buildWillowCurtains(terminalStems, c, rng, material);
   }
 
-  const geo = makeLeafGeometry(c.quads, hangingSprays);
+  const geo = makeLeafGeometry(c.quads, hangingSprays, c.leafUV ?? null);
   const count = terminalStems.length * c.leavesPerBranch;
   const windBase = new Float32Array(count);     // twig wind weight at each leaf's anchor
   const windVec = new Float32Array(count * 3);  // wind heading in instance-local space
@@ -420,3 +466,30 @@ export function buildFoliage(terminalStems, cfg, rng, material, centerUniform) {
 
 // (Cluster placement now shares buildFoliage's leaf grammar — the old
 // free-floating rosette builder is gone.)
+
+// Accent cards: extra picture sets that share the species' LEAF material via
+// its atlas (pomegranate flowers, tamarisk flower plumes). Each accent
+// { uv, chance, perBranch, size, sizeVar, widthRatio, startFrac, downAngle,
+// droop, quads, enabled } places `perBranch` base-anchored cards on a `chance`
+// fraction of the given twigs with the ordinary leaf grammar, mapped to its own
+// atlas rect. Same material → the GLB export merges them into the ONE leaves
+// primitive (export-glb.js merges piles by material). Returns InstancedMeshes.
+export function buildAccentCards(stems, foliageCfg, rng, material) {
+  const out = [];
+  for (const [ai, a] of (foliageCfg?.accents ?? []).entries()) {
+    if (!a || a.enabled === false || !a.uv) continue;
+    const chosen = stems.filter(() => rng.next() < (a.chance ?? 0.3));
+    if (!chosen.length) continue;
+    const cfg = {
+      ...foliageCfg, mode: 'leaves', leafUV: a.uv, trunkClearRadius: 0,
+      leavesPerBranch: a.perBranch ?? 1, size: a.size ?? 0.1, sizeVar: a.sizeVar ?? 0.2,
+      widthRatio: a.widthRatio ?? 1, startFrac: a.startFrac ?? 0.75, taper: 0,
+      downAngle: a.downAngle ?? 40, downAngleV: a.downAngleV ?? 15,
+      droop: a.droop ?? 10, droopV: a.droopV ?? 8, bend: 0, whorlSize: 1,
+      quads: a.quads ?? 2,
+    };
+    const mesh = buildFoliage(chosen, cfg, rng, material, null);
+    if (mesh) { mesh.name = `accent${ai}`; out.push(mesh); }
+  }
+  return out;
+}

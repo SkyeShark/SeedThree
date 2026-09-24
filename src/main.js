@@ -1,7 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { prepareFruitGeometry, makeFruitMaterial } from './core/fruit.js';
+import { prepareFruitGeometry, makeFruitMaterial, makeAtlasFruitGeometry, makeAtlasFruitGeometryLow } from './core/fruit.js';
 import { buildTree, makeBarkMaterial, makeCactusBarkMaterial, makeThatchBarkMaterial, forestBarkMaterial, MESHQ_DEFAULT } from './core/tree.js';
 import { makeFoliageMaterial } from './core/leaf-cards.js';
 import { bakeFrondCards } from './core/frond-builder.js';
@@ -176,6 +176,13 @@ async function loadSpeciesAssets(species, sunLight = null) {
     const clusterFol = makeFoliageMaterial(assets, { ...species.foliage, mode: 'clusters' });
     assets.clusterMat = clusterFol.material; assets.clusterCenter = clusterFol.centerUniform;
     assets.clusterTintNode = clusterFol.tintNode; assets.clusterTintAmount = clusterFol.tintAmount;
+  }
+  // Atlas fruit (pomegranate, fig): procedural lathe fruit UV-mapped into the
+  // LEAF atlas and drawn with the leaf material — keeps the export at 2 slots.
+  if (species.fruit?.atlas && assets.leafMat) {
+    assets.fruitGeo = makeAtlasFruitGeometry(species.fruit);
+    assets.fruitGeoLow = makeAtlasFruitGeometryLow(species.fruit);
+    assets.fruitMat = assets.leafMat;
   }
   // Fruit GLB (orchard species): Orrery-generated, retopoed + baked. Loaded
   // once per species; geometry re-origined to the stem tip so instances hang.

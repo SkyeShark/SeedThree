@@ -7,7 +7,7 @@ import { SPECIES } from '../src/species/index.js';
 const lodObject = (group, name) => group.levels.find((l) => l.object.userData.lodName === name).object;
 const meshesOf = (obj) => { const out = []; obj.traverse((o) => { if (o.isMesh) out.push(o); }); return out; };
 
-test('date palm grows within budget with a two-slot LOD0 (bark + one merged leaves mesh)', () => {
+test('date palm grows within budget with a two-material LOD0 (bark + one merged leaves mesh)', () => {
   for (const seed of [1, 2, 3, 4, 5]) {
     const { group, stats } = generate({ species: 'datePalm', seed });
     assert.equal(stats.summary.lodCount, 3);
@@ -98,5 +98,5 @@ test('date palm fruit: peduncles in the bark slot, bunches hang from them', () =
   const [barkOn, leavesOn] = tris(on.group), [barkOff, leavesOff] = tris(off.group);
   assert.ok(barkOn > barkOff, 'stalks are bark geometry');
   assert.ok(leavesOn > leavesOff, 'bunch cards are leaves geometry');
-  assert.equal(meshesOf(lodObject(on.group, 'LOD0')).length, 2, 'still exactly two slots');
+  assert.equal(meshesOf(lodObject(on.group, 'LOD0')).length, 2, 'still exactly two meshes');
 });

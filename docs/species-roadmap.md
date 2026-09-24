@@ -76,6 +76,12 @@ saguaros — the Sonoran scene reads underdressed without at least one of them.
     flag (foliage off + bark weathering tint + branch prune high); nearly
     free and adds enormous realism scattered through both biomes. Could ship
     as a `snag: true` preset toggle any time.
+13. ✅ **Arid garden trees** (*Punica granatum*, *Ficus carica*, *Tamarix
+    aphylla*) — DONE on the Weber–Penn generator with a small new feature: a
+    leaf ATLAS (fruit skin + flower cards on the leaf texture), accent flower
+    cards, procedural atlas fruit, and see-through-crown material knobs for the
+    tamarisk; see [`foliage-materials.md`](foliage-materials.md) "Leaf atlas +
+    atlas fruit". Uses the `desert` biome.
 
 ## Suggested order
 

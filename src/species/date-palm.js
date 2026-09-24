@@ -4,7 +4,9 @@
 // toward vertical, slight taper, flared base) + the PINNATE FROND BUILDER for the
 // crown (core/frond-builder.js, docs/frond-builder.md).
 //
-// References used (Wikimedia Commons, CC-BY-SA; morphology from the literature):
+// References used (Wikimedia Commons photos, CC-BY-SA, viewed as morphology
+// reference only — no photo was used as a texture or image-generation input;
+// morphology from the literature):
 //   • "Date palm orchard, Al-Faw, Basrah, Iraq" (2007) — trunk proportions, the
 //     diamond leaf-base boot pattern, crown-to-trunk ratio of grove palms.
 //   • "Date grove in Baghdadi, Iraq" — tall slender grove trunks, spherical
@@ -91,7 +93,8 @@ export const datePalm = {
   ],
   foliage: {
     mode: 'fronds',            // leaf material: no per-card flutter (merged mesh)
-    tint: 0xffffff,            // the dull gray-green grade is baked into the atlas (--live-tint) so engines match
+    mergeExportPiles: true,    // GLB export: the frond-card piles write ONE leaves primitive (export-glb.js)
+    tint: 0xffffff,            // the dull gray-green grade is baked into the atlas (--live-tint) so exports match
     alphaTest: 0.4,
     transmit: [0.30, 0.40, 0.18], // glaucous gray-green leaflets — muted backlight
     // A mature crown carries ~60–120 live fronds; the mean here (±12% per seed)

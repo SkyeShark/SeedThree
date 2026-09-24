@@ -111,6 +111,13 @@ function buildExportTree(lodRoot) {
   root.name = lodRoot.name;
   root.position.copy(lodRoot.position);
   const disposables = [];
+  // Opt-in pile merge (species foliage.mergeExportPiles → LOD root userData,
+  // core/tree.js): GLTFExporter writes one primitive per geometry group, so the
+  // instanced piles that share a material (leaf cards, accent cards and atlas
+  // fruit on one leaf-atlas material; a palm's frond-card piles) are merged into
+  // one group first → one primitive per material. Species without the flag keep
+  // one group per pile and export exactly as before.
+  const mergeByMaterial = !!lodRoot.userData?.exportMergePiles;
 
   for (const level of lodRoot.levels) {
     const src = level.object;
@@ -164,9 +171,23 @@ function buildExportTree(lodRoot) {
         disposables.push(merged);
         return { geo: merged, material: im.material };
       });
-      const geo = mergeGeometries(piles.map((p) => p.geo), true);
+      let grouped = piles;
+      if (mergeByMaterial) {
+        const byMat = new Map(); // material → its piles, in first-seen order
+        for (const p of piles) {
+          if (!byMat.has(p.material)) byMat.set(p.material, []);
+          byMat.get(p.material).push(p.geo);
+        }
+        grouped = [...byMat.entries()].map(([material, geos]) => {
+          if (geos.length === 1) return { geo: geos[0], material };
+          const g = mergeGeometries(geos, false);
+          disposables.push(g);
+          return { geo: g, material };
+        });
+      }
+      const geo = mergeGeometries(grouped.map((p) => p.geo), true);
       disposables.push(geo);
-      const leaves = new Mesh(geo, piles.map((p) => p.material));
+      const leaves = new Mesh(geo, grouped.map((p) => p.material));
       leaves.name = `${src.name}_leaves`;
       lg.add(leaves);
     }

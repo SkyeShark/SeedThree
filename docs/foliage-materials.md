@@ -72,3 +72,60 @@ Two culprits: `thicknessAmbientNode` is a flat view-independent glow floor (the 
   before transmission, so `receiveShadow=true` + a shadow-casting sun darkens interior leaves),
   and a full custom `LightingModel` subclass (both `LightingModel`/`PhysicalLightingModel` are
   exported from `three/webgpu`; hook via `setupLightingModel()`).
+
+## Leaf atlas + atlas fruit (pomegranate, fig, tamarisk)
+
+An optional second way to carry fruit and flowers, beside the orchard path
+(apple/cherry hang real GLB fruit with its own material): put every foliage
+picture — leaf card, flower card, fruit skin — on ONE leaf texture, a LEAF
+ATLAS, so the tree keeps two materials (bark + leaves). Pomegranate, fig and
+tamarisk are built this way:
+
+- **Atlas** — `scripts/texture/compose-leaf-atlas.mjs` packs chroma-keyed
+  cutouts (`fit`: cropped, base at the slot bottom, `rot180` for sprigs
+  authored hanging) and opaque swatches (`fill`, e.g. a seamless fruit skin;
+  `mul=` for a darker calyx/neck copy) into one texture and prints each
+  piece's UV rect + aspect. Then `dilate-alpha --fill --fill-rect <leaf rect>`
+  → `derive-pbr` → `derive-translucency`, and grade the fruit/flower rects of
+  the translucency map to ~0 (`grade-atlas-rect --gain 0`) so they never glow.
+- **Leaf cards** — `foliage.leafUV` maps every leaf/cluster card onto its
+  rect (`makeLeafGeometry` in `core/leaf-cards.js`); null = whole texture.
+- **Accent cards** — `foliage.accents[]` (`{ uv, chance, perBranch, size,
+  widthRatio, startFrac, downAngle, droop, enabled, cardBake }`) place extra
+  card sets (flowers) on a fraction of the twigs with the leaf grammar, on the
+  SAME leaf material (`buildAccentCards`). LOD0/LOD1 mesh them (LOD1 at half
+  chance); the LOD2 card bake includes them unless `cardBake: false`.
+- **Atlas fruit** — `fruit.atlas: { skin, calyx|neck }` + `fruit.shape`
+  ('pomegranate' | 'fig') builds a small lathe mesh (`core/fruit.js
+  makeAtlasFruitGeometry`) UV-mapped into the atlas, hung by `buildFruits` and
+  drawn with the leaf material. It carries a per-vertex `aThickness = 0`;
+  with `foliage.atlasFruit: true` the leaf material reads that as SOLID (true
+  geometric normal instead of the canopy dome, no SSS, no flutter). Fruit
+  rides LOD0 (hero mesh), LOD1 (½, low-poly twin) and the LOD2 card rung (¼,
+  low-poly) as real geometry — a card bake can only fruit ¼/½/all of its few
+  exemplar variants, which over-fruits the whole rung.
+- **Export** — fruit is exported without dome-bent normals (it is solid).
+  With `foliage.mergeExportPiles` (opt-in; the four garden species set it)
+  `export-glb.js` merges the instanced piles that share a material before
+  grouping, so leaves + fruit + accents write ONE leaves primitive per LOD;
+  without it every pile keeps its own primitive, as before.
+- **See-through crowns (tamarisk)** — a haze of thread-thin branchlets is
+  built from MANY small cards on invisible guide twigs
+  (`terminalStemsAreGuides`), plus three opt-in leaf-material knobs
+  (`core/leaf-cards.js`; all default off, so other species are unchanged):
+  `selfShadowFloor` (received shadow never darkens below it — no opaque dark
+  cores), `shadowAlphaCut` (only texels at least this opaque cast shadow —
+  speckled, not solid card shadows) and `alphaDitherMip` + `alphaDitherRange`
+  (past that texture mip the alpha test fades into a screen-space dither, so a
+  card covers ≈ its mean alpha at range instead of the solid lobed silhouette
+  its averaged far mips pass at a fixed cutoff). The dither is render-only:
+  `alphaTest` stays the exported glTF MASK cutoff, so an engine needs its own
+  dithered/TAA opacity mask to get the same far haze. The LOD2 card material
+  inherits `transmit` + `selfShadowFloor` when the floor is set.
+  Tamarisk atlas recipe: branchlet + flower panicle keyed with `chroma-key`,
+  `compose-leaf-atlas` (plume `fit:rot180:mul=0.74,0.73,0.62`, flower
+  `fit:rot180:mul=1.12,1.02,0.95`), `grade-atlas-rect` on the plume rect
+  (`--hue 70 --pull 0.55 --sat 0.85 --gamma 0.95 --gain 0.97`), then
+  `dilate-alpha --fill --fill-rect <plume>` → `derive-pbr` →
+  `derive-translucency` with the flower rect at `--gain 0.8` (pale petals do
+  transmit; zeroing them rendered the spikes dark brown).

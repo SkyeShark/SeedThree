@@ -7,7 +7,7 @@ import { Group, LOD, Mesh, MeshStandardNodeMaterial } from 'three/webgpu';
 import { Rng } from './rng.js';
 import { generateSkeleton } from './weber-penn.js';
 import { buildBranchGeometry, estimateBranchTriangles } from './branch-mesh.js';
-import { buildFoliage } from './leaf-cards.js';
+import { buildFoliage, buildAccentCards } from './leaf-cards.js';
 import { buildCardFoliage, stableStemSubset } from './branch-cards.js';
 import { buildYuccaFoliage } from './yucca-leaves.js';
 import { generateDichotomous, buildMergedMesh } from './dichotomous.js';
@@ -338,6 +338,7 @@ function buildDichotomousTree(species, seed, assets, lodOpts, reuse = null) {
   lod.position.y = -(species.plantSink ?? 0.2);
   lod.userData = {
     species: species.name, seed,
+    ...(species.foliage?.mergeExportPiles && { exportMergePiles: true }), // export-glb.js opt-in
     mobileBuilt: !!lodOpts.mobileTarget, // reuse only when the mobile state matches (LOD distances differ)
     stemCount: stems.length, tipCount: terminalStems.length,
     leafInstances: stats[0].leafInstances, levels: stats,
@@ -485,6 +486,7 @@ function buildFrondTree(species, seed, assets, lodOpts) {
   lod.position.y = -(species.plantSink ?? 0.15);
   lod.userData = {
     species: species.name, seed,
+    ...(species.foliage?.mergeExportPiles && { exportMergePiles: true }), // export-glb.js opt-in
     mobileBuilt: !!lodOpts.mobileTarget,
     stemCount: stems.length + (layout?.fronds.length ?? 0), tipCount: layout?.fronds.length ?? 0,
     leafInstances: leaflets0, levels: stats,
@@ -1063,19 +1065,26 @@ export function buildTree(species, seed, assets = {}, lodOpts = {}, reuse = null
     // scaffolding (terminalStemsAreGuides), and fruit hung there floats in
     // canopy air — so hang from the deepest RENDERED stems instead.
     // Placed OUTSIDE the branch budget solve (decoration on top, LOD1 thinned).
-    if (species.fruit && assets.fruitGeo && assets.fruitMat && i < 2 && species.foliage !== false) {
+    // Atlas fruit (pomegranate, fig — leaf-slot lathe geometry) also rides the
+    // LOD2 card rung as LOW-POLY real fruit (fruitGeoLow): a card bake can only
+    // carry fruit on a quarter/half/all of its few exemplar variants, which
+    // over-fruits the whole card rung. Mesh LOD1 keeps half, LOD2 a quarter.
+    const atlasFruit = !!(species.fruit?.atlas && assets.fruitGeoLow);
+    if (species.fruit && assets.fruitGeo && assets.fruitMat && i < (atlasFruit ? 3 : 2) && species.foliage !== false) {
       const frng = new Rng(`${species.name}:${seed}:fruit${i}`);
       // LOD1 keeps a QUARTER of the fruit: at the 12m+ switch each fruit is a
       // few pixels, but zero would be a visible pop. The solver absorbs the
       // cost (fruit feeds folTris below), so the percent target still holds.
+      const keep = atlasFruit ? [1, 0.5, 0.25][i] : 0.25;
       const fcfg = i === 0 ? species.fruit
-        : { ...species.fruit, maxCount: Math.round((species.fruit.maxCount ?? 120) * 0.25) };
+        : { ...species.fruit, maxCount: Math.round((species.fruit.maxCount ?? 120) * keep) };
+      const fruitGeo = i > 0 && atlasFruit ? assets.fruitGeoLow : assets.fruitGeo;
       let fruitStems = levelTerminals;
       if (guideLevel != null) {
         const deepestWood = Math.max(...meshStems.map((s) => s.level));
         fruitStems = meshStems.filter((s) => s.level === deepestWood);
       }
-      const fruit = buildFruits(fruitStems, fcfg, frng, assets.fruitGeo, assets.fruitMat, meshStems);
+      const fruit = buildFruits(fruitStems, fcfg, frng, fruitGeo, assets.fruitMat, meshStems);
       if (fruit) {
         leafInstances += fruit.count;
         level.add(fruit);
@@ -1083,6 +1092,23 @@ export function buildTree(species, seed, assets = {}, lodOpts = {}, reuse = null
         // branch solver) — otherwise LOD1 blows past its percent target by
         // exactly the fruit cost.
         folTris += geoTris(fruit.geometry) * fruit.count;
+      }
+    }
+
+    // Accent cards (atlas flowers — pomegranate, tamarisk): extra leaf-material
+    // card sets on a fraction of the twigs. Mesh levels only (the LOD2 card
+    // bake carries them); LOD1 keeps half. Counted into folTris like fruit.
+    if (species.foliage?.accents?.length && assets.leafMat && !useCards && leavesOn) {
+      const arng = new Rng(`${species.name}:${seed}:accents${i}`);
+      const acfg = i === 0 ? species.foliage : {
+        ...species.foliage,
+        accents: species.foliage.accents.map((a) => ({ ...a, chance: (a.chance ?? 0.3) * 0.5 })),
+      };
+      for (const m of buildAccentCards(levelTerminals, acfg, arng, assets.leafMat)) {
+        m.castShadow = true; m.receiveShadow = true;
+        leafInstances += m.count;
+        folTris += geoTris(m.geometry) * m.count;
+        level.add(m);
       }
     }
 
@@ -1159,6 +1185,7 @@ export function buildTree(species, seed, assets = {}, lodOpts = {}, reuse = null
 
   lod.userData = {
     species: species.name, seed,
+    ...(species.foliage?.mergeExportPiles && { exportMergePiles: true }), // export-glb.js opt-in
     stemCount: stems.length, tipCount: tips.length,
     leafInstances: levelStats[0]?.leafInstances ?? 0,
     levels: levelStats,

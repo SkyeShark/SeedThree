@@ -15,16 +15,16 @@ A fully procedural tree and plant generator: pick a species, tune its parameters
 ![SeedThree — a procedurally generated White Oak tree with the live control panel showing shape, foliage, and advanced branch tuning](docs/media/hero_temperate.png)
 ![SeedThree — a procedurally generated Joshua tree in the desert with the live control panel showing shape, foliage, and LOD parameters](docs/media/hero.png)
 
-> **Status: `v0.1.0-alpha`.** Twenty-one species, full LOD + export pipeline, and a living scene are in — but it's early and rough in places. Expect sharp edges.
+> **Status: `v0.1.0-alpha`.** Twenty-four species, full LOD + export pipeline, and a living scene are in — but it's early and rough in places. Expect sharp edges.
 
 ## What's in it
 
-- **Twenty-one species across two biomes**
+- **Twenty-four species across two biomes**
   - *Temperate:* White Oak · Red Maple · Tulip Poplar · Sweetgum · American Beech · Ponderosa Pine · Loblolly Pine · Douglas Fir · Cultivated Apple · Sweet Cherry · Paper Birch · Quaking Aspen · American Sycamore · Flowering Dogwood · Weeping Willow
-  - *Desert:* Joshua Tree · Saguaro · Creosote Bush · Blackbrush · Big Sagebrush · Date Palm
+  - *Desert:* Joshua Tree · Saguaro · Creosote Bush · Blackbrush · Big Sagebrush · Date Palm · Pomegranate · Common Fig · Athel Tamarisk
 - **Palm fronds.** A pinnate frond builder (curved, drooping rachis + V-folded leaflet cards in several planes) on the dichotomous trunk — see [`docs/frond-builder.md`](docs/frond-builder.md).
 - **Two generators.** A [Weber–Penn](https://courses.cs.duke.edu/fall02/cps124/resources/p119-weber.pdf) parametric model for broadleaves & conifers, and a from-scratch dichotomous [L-system](https://en.wikipedia.org/wiki/L-system) for the desert plants — succulents (merged-tube mesh, rib crests, areole spines) and multi-stem shrubs (root-crown stem splay, spray-card foliage).
-- **Real fruit.** The orchard species hang actual fruit meshes (AI-generated, retopoed, and rebaked down to game weight) from their fruiting twigs — gravity-oriented instances with anti-clip placement, present at every LOD: real geometry near, baked into the branch cards and billboard far.
+- **Real fruit.** The orchard species hang actual fruit meshes (AI-generated, retopoed, and rebaked down to game weight) from their fruiting twigs — gravity-oriented instances with anti-clip placement, present at every LOD: real geometry near, baked into the branch cards and billboard far. Pomegranate and fig use small procedural fruit instead, textured from their leaf atlas (see [`docs/foliage-materials.md`](docs/foliage-materials.md) "Leaf atlas + atlas fruit").
 - **Real morphology.** Each species' branch angles, taper, gnarl, and crown shape are dialed to reference photos, not generic defaults.
 - **Foliage as cards.** Base-anchored single leaves, needle sprays, and top-anchored hanging vines with backlit translucency (Barré-Brisebois SSS), dome-normal canopy shading, and per-instance wind.
 - **LOD chain + impostors.** LOD0 full geometry → reduced-geometry LOD1 → baked branch-card LOD2 → a 2-plane billboard impostor, baked off-thread in a Web Worker so the viewer never stalls. Per-LOD density & branch-prune dials.
@@ -56,6 +56,8 @@ Textures and audio ship in the repo, so a clone runs out of the box — you don'
 
 - **Textures** (bark albedo, leaf/needle/spine alpha cards) come from **OpenAI Codex CLI's `$imagegen`** (gpt-image-2). Scripts in `scripts/texture/` chroma-key the alpha, dilate, and derive normal/roughness/translucency maps.
   - *Date palm:* leaflet sheets, date bunch, and leaf-base trunk tile are text-prompted `$imagegen` (the dead-leaflet sheet is an image edit of the generated live-leaflet sheet), packed by `compose-frond-atlas.mjs` / `compose-palm-bark-atlas.mjs`; the rachis/peduncle strips are procedural.
+  - *Pomegranate, fig, athel tamarisk:* bark tiles, leaf/branchlet cards, flower cards, and fruit-skin swatches are text-prompted `$imagegen`, packed into one leaf atlas per species by `compose-leaf-atlas.mjs`.
+  - No photographs were used as image inputs; the Wikimedia Commons photos cited in the species files were morphology reference only.
 - **Wind beds** are generated with **Stable Audio 3** via a local **ComfyUI**, then analyzed and flattened into seamless loops by `scripts/audio/`. Bird calls are trimmed [xeno-canto](https://xeno-canto.org) recordings.
 
 It's a cross-tool collaboration: the engine, PBR derivation, and scene are written by Claude Code; Codex paints the textures; Stable Audio scores the wind.
@@ -93,6 +95,8 @@ Rules of thumb: `length[childLevel]` is a **fraction of the parent's** length (s
 
 **B) Desert succulents (saguaro, Joshua tree, yuccas) → dichotomous [L-system](https://en.wikipedia.org/wiki/L-system) (Lindenmayer).** These aren't branch-and-leaf trees, so they run a completely different generator: set `foliageType: 'rosette'` (or `cactus: true`) and describe the plant as an **L-system** — a branching grammar of fork rules (probability, depth, split angle), segment length/taper, rib count, arm gating, and rosette-leaf or areole-spine placement — which builds a single merged-tube mesh. Copy `saguaro.js` / `joshua-tree.js`; the grammar, parameters, and mesh construction are documented in [`docs/dichotomous-generator.md`](docs/dichotomous-generator.md).
 
+**Leaf-atlas species (optional).** A Weber–Penn species can also carry flowers and fruit on its leaf texture instead of separate materials: compose one atlas with `scripts/texture/compose-leaf-atlas.mjs` and map the pieces with `foliage.leafUV` (leaf cards), `foliage.accents` (flower cards) and `fruit.atlas` (procedural fruit) — see `pomegranate.js` / `fig.js` / `tamarisk.js` and [`docs/foliage-materials.md`](docs/foliage-materials.md) "Leaf atlas + atlas fruit".
+
 **C) Palms → `foliageType: 'fronds'`.** A single unbranched dichotomous trunk plus the pinnate frond builder (curved rachis, V-folded leaflet cards, dead-frond skirt, fruit bunches) — copy `date-palm.js`; the parameters and the frond/bark atlas layout are documented in [`docs/frond-builder.md`](docs/frond-builder.md).
 
 ### 2. Generate the textures (image model → PBR maps)
@@ -115,6 +119,7 @@ node scripts/texture/derive-translucency.mjs assets/leaves/redcedar_needle_albed
 Art-direction gotchas learned the hard way:
 - **A needle spray must be a single feather/frond branchlet** — one central woody axis with needles emanating ~45° on both sides, fully inside the frame. A *radial burst* from one point reads as a **grass tuft** on the tree, not a conifer.
 - Bark must tile with no visible seam (offset-check it); a leaf card should fill the frame with a little margin so alpha-dilation and mip-mapping don't clip it.
+- **Fill the transparent texels, all of them.** `dilate-alpha --passes N` only pads N px; a thin spray on a big atlas keeps black texels that bleed into the far mips (dark/navy cards at distance). Use `--fill` (pull-push), and for a sparse spray on a brown twig add `--fill-rect <leaf rect>` so the far mips stay leaf-green instead of mixing twig/fruit colours into olive-brown.
 
 If you use OpenAI Codex CLI: it can't always save into the workspace, so prompt it to *"generate the image only — do not save/read/list/search files"*, tag the prompt with a unique marker, then harvest the bytes with `scripts/texture/harvest-codex-image.mjs --match <marker> <out.png>`.
 
@@ -136,6 +141,7 @@ src/
   ui/          control panel
 scripts/
   texture/     Codex image → alpha cutout → PBR/translucency maps
+  reference/   reference tooling; snapshot-stats.mjs dumps per-species generate() stats (seeds 1–3) for regression diffs
   audio/       Stable Audio generation + seamless-loop tooling
 assets/        committed textures & audio
 docs/          spec notes + media
