@@ -130,7 +130,16 @@ function buildExportTree(lodRoot) {
     });
 
     for (const [i, mesh] of plain.entries()) {
-      const out = new Mesh(mesh.geometry, mesh.material);
+      // Opt-in attribute whitelist (palm frond leaves: a merged mesh whose wind /
+      // SSS attributes are shader-only) — engines get position/normal/uv only.
+      let geo = mesh.geometry;
+      const keepAttrs = geo.userData?.exportAttributes;
+      if (keepAttrs) {
+        geo = geo.clone();
+        for (const name of Object.keys(geo.attributes)) if (!keepAttrs.includes(name)) geo.deleteAttribute(name);
+        disposables.push(geo);
+      }
+      const out = new Mesh(geo, mesh.material);
       out.name = mesh.name || `${src.name}_branches${plain.length > 2 ? `_${i}` : ''}`;
       lg.add(out);
     }

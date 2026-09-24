@@ -223,7 +223,7 @@ function bowedCardGeometry(
 
 // Same material family + dome-normal blend as LOD0 leaves — matched diffuse
 // response across the LOD switch is what hides the pop (proxy-normal transfer).
-function makeCardMaterial(t, centerUniform, opts = {}) {
+export function makeCardMaterial(t, centerUniform, opts = {}) {
   const mat = new MeshSSSNodeMaterial({
     map: t.albedo, normalMap: t.normal, roughnessMap: t.rough,
     alphaTest: 0.35, side: DoubleSide, roughness: 1.0, metalness: 0.0,

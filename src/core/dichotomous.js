@@ -53,6 +53,11 @@ const DEFAULTS = {
   trunks: 1,              // multi-trunk is rare
   trunkSplayDeg: 14,
   tileWorldSize: 0.8,     // bark UV tile (m)
+  trunkLean: 0,           // palms: initial lean of a SINGLE trunk off vertical (deg); curlUp bends it back up
+  trunkLeanAz: 0,         // …its azimuth (rad)
+  segRadiusKeep: 0.96,    // radius kept along one segment (arms barely taper; palm trunks ~0.99)
+  contRadiusKeep: 0.98,   // radius handed to a single-F continuation
+  trunkUndulation: 1,     // amplitude multiplier on the ground-segment root-flare undulation
   windWeightScale: 1,     // scales the whole wind field: the flexGain ramp is
                           // tuned for metre-scale trees; sub-metre SHRUBS get
                           // tree amplitudes over centimetres and read as jello
@@ -194,7 +199,7 @@ export function generateDichotomous(userParams, rng) {
   // vs a single continuation run — the skirt only tapers at true forks.
   function grow(origin, dir, radius, length, depth, level, windBase, flareBase, baseIsFork = false, isGroundBase = false) {
     const flexGain = [0.3, 0.4, 0.5, 0.55][Math.min(level, 3)];
-    const r1 = Math.max(p.minRadius, radius * 0.96); // arms barely taper along a segment
+    const r1 = Math.max(p.minRadius, radius * (p.segRadiusKeep ?? 0.96)); // arms barely taper along a segment
     // the trunk gets extra rings so its flare + undulation can be organic
     const seg = growSegment(origin, dir, length, radius, r1, p, rng, level === 0 ? (p.trunkSegRes ?? 9) : undefined);
     // Blend the base ring toward flareBase over the first 40% of the segment. A
@@ -219,7 +224,7 @@ export function generateDichotomous(userParams, rng) {
       for (let i = 0; i < seg.radii.length; i++) {
         const z = i / (seg.radii.length - 1);
         const flare = z < 0.35 ? 1 + p.trunkFlare * (1 - z / 0.35) : 1;
-        const amp = 0.10 + 0.16 * (1 - z); // undulation grows toward the base
+        const amp = (0.10 + 0.16 * (1 - z)) * (p.trunkUndulation ?? 1); // undulation grows toward the base
         const und = 1 + amp * (Math.sin(z * 8.3) * 0.6 + Math.sin(z * 21.7 + 1.9) * 0.4);
         seg.radii[i] *= flare * und;
       }
@@ -252,7 +257,7 @@ export function generateDichotomous(userParams, rng) {
       // angle — not a smooth curve. continuationKink sets that elbow (Joshua ~16°).
       cdir.applyAxisAngle(perp(cdir), (rng.vary(0, p.continuationKink ?? 8) * Math.PI) / 180).normalize();
       cdir = repelDir(endPos, tropism(cdir, p.curlUp * 0.4), length);
-      stem.children.push(grow(endPos, cdir, endRadius * 0.98, length, depth - 1, level, windTip, endRadius, false));
+      stem.children.push(grow(endPos, cdir, endRadius * (p.contRadiusKeep ?? 0.98), length, depth - 1, level, windTip, endRadius, false));
     };
     // SAGUARO: an arm may sprout only on the UPPER trunk (height gate) and only
     // from a low branch order (order gate) — so the column reliably gets a few
@@ -327,6 +332,8 @@ export function generateDichotomous(userParams, rng) {
     if (nTrunks > 1) {
       const az = (Math.PI * 2 * t) / nTrunks;
       dir.applyAxisAngle(X, (p.trunkSplayDeg * Math.PI) / 180).applyAxisAngle(UP, az).normalize();
+    } else if (p.trunkLean) {
+      dir.applyAxisAngle(X, (p.trunkLean * Math.PI) / 180).applyAxisAngle(UP, p.trunkLeanAz ?? 0).normalize();
     }
     // windBase 0: the ground-contact ring is PINNED. Any base weight makes the
     // trunk slide laterally against the ground plane in the wind — invisible
@@ -528,6 +535,15 @@ export function buildMergedMesh(stems, params, targetGeo = null) {
       // jump. The Bark-tiling dial repurposes cleanly here: it sets the vertical tile
       // size (rib spacing down the column) without disturbing the locked rib columns.
       tileV = Math.max(0.05, p.tileWorldSize);
+    } else if (p.barkAtlas) {
+      // BARK ATLAS (palms — compose-palm-bark-atlas.mjs): the bark image holds the
+      // trunk tile in u ∈ [0, regionU] (`tilesAround` periodic copies) and colour
+      // strips for the crown tubes beyond it. One revolution maps to exactly that
+      // region, so the trunk never samples a strip; V keeps square texels
+      // (tileAspect = copy height / width in pixels).
+      const ba = p.barkAtlas;
+      uScale = ba.regionU;
+      tileV = Math.max(0.02, (circRef / Math.max(1, ba.tilesAround)) * (ba.tileAspect ?? 1));
     } else {
       const wraps = circRef / p.tileWorldSize;
       uScale = wraps >= 0.75 ? Math.max(1, Math.round(wraps)) : wraps; // integer on stems, fractional only on thin twigs

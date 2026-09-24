@@ -4,6 +4,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { prepareFruitGeometry, makeFruitMaterial } from './core/fruit.js';
 import { buildTree, makeBarkMaterial, makeCactusBarkMaterial, makeThatchBarkMaterial, forestBarkMaterial, MESHQ_DEFAULT } from './core/tree.js';
 import { makeFoliageMaterial } from './core/leaf-cards.js';
+import { bakeFrondCards } from './core/frond-builder.js';
 import { makeYuccaMaterial } from './core/yucca-leaves.js';
 import { makeSpineMaterial } from './core/cactus-spines.js';
 import { buildEnvironment } from './core/environment.js';
@@ -165,8 +166,10 @@ async function loadSpeciesAssets(species, sunLight = null) {
     assets.frondDryness = yucca.dryness;
   } else {
     // Two foliage materials: single-leaf (LOD0) and cluster (LOD1+). Cached & reused.
-    const directMode = species.foliage?.mode === 'willowCurtains'
-      ? 'willowCurtains' : 'leaves';
+    // Merged-mesh foliage modes (willow curtains, palm fronds) keep their mode:
+    // their per-vertex wind cannot use the instanced-leaf flutter term.
+    const directMode = (species.foliage?.mode === 'willowCurtains' || species.foliage?.mode === 'fronds')
+      ? species.foliage.mode : 'leaves';
     const leafFol = makeFoliageMaterial(assets, { ...species.foliage, mode: directMode });
     assets.leafMat = leafFol.material; assets.leafCenter = leafFol.centerUniform;
     assets.leafTintNode = leafFol.tintNode; assets.leafTintAmount = leafFol.tintAmount;
@@ -660,6 +663,32 @@ async function main() {
         baking = false;
       }
       if (!cards) return null; // far rung falls back to sparse cones
+      cardCache.set(key, cards);
+      if (cardCache.size > 6) {
+        const [oldKey, old] = cardCache.entries().next().value;
+        if (oldKey !== key) { cardCache.delete(oldKey); disposeBranchCards(old); }
+      }
+      return cards;
+    }
+    if (species.foliageType === 'fronds') {
+      // Palms: one straightened exemplar frond per variant baked to a card, then
+      // placed as curved V-ribbons (LOD2 desktop; the near + far mobile rungs).
+      if (!shaped.foliage) return null;
+      const bakeShape = JSON.stringify({ foliage: shaped.foliage });
+      const key = `${species.name}|fronds|${bakeShape}|${optState.cardRes}`;
+      let cards = cardCache.get(key);
+      if (cards) return cards;
+      const assets = assetCache.get(species.name);
+      baking = true;
+      try {
+        cards = await bakeFrondCards(renderer, shaped, assets, { size: Math.max(512, optState.cardRes) });
+      } catch (e) {
+        console.error('[SeedThree] frond card bake failed:', e);
+        cards = null;
+      } finally {
+        baking = false;
+      }
+      if (!cards) return null; // LOD2 falls back to sparse real leaflets
       cardCache.set(key, cards);
       if (cardCache.size > 6) {
         const [oldKey, old] = cardCache.entries().next().value;
@@ -1511,7 +1540,7 @@ async function main() {
     renderFrame(); // N8AO or plain beauty; billboard bake is off-thread
   });
 
-  Object.assign(window, { THREE, scene, camera, renderer, state, optState, envState, postProcessing, aoPass, scenePass, setAOOutput, applyAA, assetCache, rebuild: () => { needsRebuild = true; }, _rebuildNow: rebuild, applyPreset });
+  Object.assign(window, { THREE, scene, camera, controls, getTree: () => currentTree, renderer, state, optState, envState, postProcessing, aoPass, scenePass, setAOOutput, applyAA, assetCache, rebuild: () => { needsRebuild = true; }, _rebuildNow: rebuild, applyPreset });
 }
 
 main().catch((e) => fail(`Init failed: ${e?.stack || e}`));

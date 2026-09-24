@@ -163,6 +163,7 @@ export function buildGUI(opts) {
     if (!cMobile) return;
     const sp = speciesMap[state.speciesKey];
     const isRosette = sp?.foliageType === 'rosette';
+    const isFronds = sp?.foliageType === 'fronds'; // palms: frond builder, baked frond cards
     const isCactus = isRosette && !!sp?.cactus;   // saguaro: spines, fluted ribs
     const isWillow = sp?.foliage?.mode === 'willowCurtains';
     cMobile.show(true);                            // mobile target works on both generator paths
@@ -170,9 +171,9 @@ export function buildGUI(opts) {
     // ROSETTE path (Joshua/yucca/saguaro): budget% and prune don't apply (no branch
     // cards / no twig skeleton to prune), so hide them; density → rosette/spine
     // density, quality → cone/rib detail. Temperate path keeps its card/budget dials.
-    cLod1Pct.show(!m && !isRosette); cLod2Pct.show(!m && !isRosette);
-    cLod1Prn.show(!m && !isRosette && !isWillow);
-    cLod2Prn.show(!m && !isRosette && !isWillow && !sp?.preserveLod2Tips);
+    cLod1Pct.show(!m && !isRosette && !isFronds); cLod2Pct.show(!m && !isRosette && !isFronds);
+    cLod1Prn.show(!m && !isRosette && !isWillow && !isFronds);
+    cLod2Prn.show(!m && !isRosette && !isWillow && !isFronds && !sp?.preserveLod2Tips);
     // This dial owns structural tubes only. Cactus rib counts and spine density
     // are species controls; here it only changes lengthwise ring density below
     // the tuned default. Rosette cones are fixed per-LOD on purpose.
@@ -182,7 +183,7 @@ export function buildGUI(opts) {
     // LOD0 rosette density exists only where the mobile NEAR rung does — the
     // desktop hero always renders full crowns.
     cLod0Den.show(m && isRosette && !isCactus);
-    const denLabel = isCactus ? 'spine density' : isRosette ? 'rosette density' : m ? 'card density' : 'foliage density';
+    const denLabel = isCactus ? 'spine density' : isRosette ? 'rosette density' : isFronds ? 'frond density' : m ? 'card density' : 'foliage density';
     // Desktop cactus LOD2 intentionally has no ribs/crest anchors and therefore
     // no spines. In mobile mode LOD1 is parked, while the promoted near rung
     // consumes lod2Density. Expose only the density dial that reaches a visible
@@ -244,10 +245,11 @@ export function buildGUI(opts) {
   function buildAdvancedControls() {
     advanced.controllers.slice().forEach((ct) => ct.destroy());
     const sp = speciesMap[state.speciesKey];
-    const isRosette = sp.foliageType === 'rosette';
+    // Palms (fronds) share the flat dial list: trunk L-system + frond builder.
+    const isRosette = sp.foliageType === 'rosette' || sp.foliageType === 'fronds';
     const advList = sp.advancedControls;
     advanced.domElement.style.display = (isRosette && !advList?.length) ? 'none' : '';
-    if (advanced.title) advanced.title(isRosette ? 'Advanced: L-system' : 'Advanced: branch levels');
+    if (advanced.title) advanced.title(sp.foliageType === 'fronds' ? 'Advanced: trunk & fronds' : isRosette ? 'Advanced: L-system' : 'Advanced: branch levels');
     if (isRosette) {
       // Flat dichotomous-generator params (fork angle/thickness, candelabra set,
       // trunk flare, anti-intersection, …). Same {get,set} pattern as Shape dials.
@@ -298,7 +300,10 @@ export function buildGUI(opts) {
     bark.controllers.slice().forEach((ct) => ct.destroy());
     const sp = speciesMap[state.speciesKey];
     const isRosette = sp.foliageType === 'rosette';
-    const isHangingSpray = sp.foliage?.mode === 'hangingSprays' || sp.foliage?.mode === 'willowCurtains';
+    // Palm fronds are placed by the frond builder (its own dials), so the
+    // leaf-card geometry dials (angle/start/size variance/billboard) don't apply.
+    const isFrondPalm = sp.foliageType === 'fronds';
+    const isHangingSpray = sp.foliage?.mode === 'hangingSprays' || sp.foliage?.mode === 'willowCurtains' || isFrondPalm;
     const isCactus = !!sp.cactus;              // saguaro → spines
     const isFrondRosette = isRosette && !isCactus; // Joshua/yuccas → fronds
     // Rosette species (yucca/cactus) don't use the leaf-card material, so hide the
@@ -315,7 +320,7 @@ export function buildGUI(opts) {
         leaves.add(proxy, 'leafSizeVar', 0, 1, 0.01).name('Size variance').onChange(geom('leafSizeVar'));
       }
       leaves.add(proxy, 'leafAlpha', 0, 1, 0.01).name('Alpha test').onChange(mtweak('leafAlpha'));
-      leaves.add(proxy, 'leafQuads', { 'Single': 1, 'Crossed (double)': 2 }).name('Billboard').onChange(geom('leafQuads'));
+      if (!isFrondPalm) leaves.add(proxy, 'leafQuads', { 'Single': 1, 'Crossed (double)': 2 }).name('Billboard').onChange(geom('leafQuads'));
     }
     // Fronds (Joshua/yuccas): recolor each age stage (green→dry→dryest) and bias
     // the whole plant along that ramp. Live material tweaks — no rebuild.

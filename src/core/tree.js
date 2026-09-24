@@ -13,6 +13,9 @@ import { buildYuccaFoliage } from './yucca-leaves.js';
 import { generateDichotomous, buildMergedMesh } from './dichotomous.js';
 import { buildCactusSpines } from './cactus-spines.js';
 import { buildFruits } from './fruit.js';
+import {
+  layoutCrown, buildCrownGeometry, buildFrondCardFoliage, mergeIndexedGeometries, FROND_LOD_SPECS, FROND_DEFAULTS,
+} from './frond-builder.js';
 
 // Branch/trunk mesh-quality slider: the DEFAULT position, used as the
 // normalization anchor everywhere the slider is consumed. At the default the
@@ -342,6 +345,159 @@ function buildDichotomousTree(species, seed, assets, lodOpts, reuse = null) {
   };
   return { group: lod, stems, tips: terminalStems };
 }
+// ---- palms: dichotomous trunk (no forks) + pinnate frond crown ------------
+// See docs/frond-builder.md. The trunk is the dichotomous L-system with
+// branchiness 0 — a single run of F segments (lean, gentle curve back toward
+// vertical, slight taper, flared base) meshed by buildMergedMesh. The crown is
+// laid out ONCE per individual (layoutCrown) and meshed per LOD, so levels never
+// reshuffle. Per-seed individuality (height, lean, crown fullness, frond length,
+// droop, skirt) is drawn from its own stream so the dials set the MEAN and the
+// seed picks the individual.
+export function individualizePalm(species, seed) {
+  const p = species.params ?? {};
+  const f = { ...FROND_DEFAULTS, ...(species.foliage || {}) };
+  const rng = new Rng(`${species.name}:${seed}:individual`);
+  const height = Math.max(1, (p.trunkHeight ?? 10) * (1 + rng.vary(0, p.heightVar ?? 0.2)));
+  // Lean: most palms stand fairly straight, a few lean hard — skew the draw.
+  const lean = (p.lean ?? 8) * Math.pow(rng.next(), 0.8) * 1.25;
+  const leanAz = rng.range(0, Math.PI * 2);
+  const frondCount = Math.max(4, Math.round(f.frondCount * (1 + rng.vary(0, f.frondCountVar ?? 0.15))));
+  const frondLength = f.frondLength * (1 + rng.vary(0, 0.1));
+  const droop = f.droop * (1 + rng.vary(0, 0.15));
+  const deadCount = Math.round((f.deadCount ?? 0) * rng.range(0.6, 1.4));
+  const segLen = p.segmentLength ?? 1.4;
+  const segs = Math.max(3, Math.round(height / segLen));
+  return {
+    params: {
+      ...p, trunks: 1, branchiness: 0, forkTriChance: 0, armAsymmetric: false,
+      firstForkHeight: height / segs, forkGenerations: segs,
+      trunkLean: lean, trunkLeanAz: leanAz,
+    },
+    foliage: { ...f, frondCount, frondLength, droop, deadCount },
+    height, lean, frondCount,
+  };
+}
+
+function buildFrondTree(species, seed, assets, lodOpts) {
+  const speciesSlug = species.name.replace(/\s+/g, '_');
+  const ind = individualizePalm(species, seed);
+  const { stems } = generateDichotomous(ind.params, new Rng(`${species.name}:${seed}`));
+  // Palm wind field: the dichotomous ramp saturates a tall single trunk to 1 by
+  // its middle; a palm sways from the crown — weight ∝ (height fraction)^1.5 up
+  // to trunkTopWind at the crown, then the fronds ramp to 1 at their tips.
+  const trunkTop = stems[stems.length - 1];
+  const tipPt = trunkTop.points[trunkTop.points.length - 1];
+  const H = Math.max(0.5, tipPt.y);
+  const wTop = ind.foliage.trunkTopWind ?? 0.3;
+  for (const s of stems) s.winds = s.points.map((pt) => wTop * Math.pow(Math.max(0, pt.y) / H, 1.5));
+  const n = trunkTop.points.length;
+  const top = {
+    pos: tipPt.clone(),
+    dir: tipPt.clone().sub(trunkTop.points[n - 2]).normalize(),
+    radius: trunkTop.radii[n - 1],
+  };
+  const root = stems[0];
+  const base = { pos: root.points[0].clone(), radius: root.radii[Math.min(root.radii.length - 1, Math.floor(root.radii.length * 0.5))] };
+  const foliageOn = species.foliage !== false;
+  const layout = foliageOn ? layoutCrown(top, base, ind.foliage, new Rng(`${species.name}:${seed}:crown`)) : null;
+  if (layout) for (const fr of layout.fronds) fr.seedKey = `${species.name}:${seed}`;
+  if (layout && assets.leafCenter) assets.leafCenter.value.copy(layout.domeOrigin);
+
+  // Branch/trunk quality dial — same normalization as the dichotomous path.
+  const q = Math.max(0.3, lodOpts.meshQuality ?? MESHQ_DEFAULT);
+  const qn = Math.min(1.25, q / MESHQ_DEFAULT);
+  const lowQ = Math.max(0, (MESHQ_DEFAULT - q) / (MESHQ_DEFAULT - 0.3));
+  const rs = (b) => Math.max(4, Math.round(b * qn));
+  const ring = (spacing, angle) => ({ ringMaxSpacing: spacing + 0.6 * lowQ, ringKeepAngle: angle + 15 * lowQ });
+  const d1 = Math.max(0.2, Math.min(1, lodOpts.lod1Density ?? 1));
+  const d2 = Math.max(0.2, Math.min(1, lodOpts.lod2Density ?? 1));
+  const cards = lodOpts.branchCards?.fronds ? lodOpts.branchCards : null;
+  const levels = [
+    { name: 'LOD0', distance: 0, radialSegs: rs(species.params.radialSegs ?? 12), ...ring(0, 0), spec: FROND_LOD_SPECS.LOD0 },
+    { name: 'LOD1', distance: lodOpts.lod1Dist ?? 35, radialSegs: rs(8), ...ring(0.35, 12), spec: { ...FROND_LOD_SPECS.LOD1, leafletKeep: FROND_LOD_SPECS.LOD1.leafletKeep * d1 } },
+    { name: 'LOD2', distance: lodOpts.lod2Dist ?? 70, radialSegs: rs(6), ...ring(0.6, 18), spec: { ...FROND_LOD_SPECS.LOD2, leafletKeep: FROND_LOD_SPECS.LOD2.leafletKeep * d2 }, cards: { keepFraction: d2 } },
+  ];
+  if (lodOpts.mobileTarget) {
+    // Mobile ladder: park the mesh LODs (bake source + what the dials edit),
+    // promote the frond-card LOD2 to the near view, then two cheaper card rungs.
+    levels[0].hiddenInApp = true;
+    levels[1].hiddenInApp = true;
+    levels[2].cards = { keepFraction: 1 };
+    levels.push({ name: 'LOD3', distance: lodOpts.lod1Dist ?? 35, appOnly: true, radialSegs: rs(6), ...ring(0.8, 22), spec: { ...FROND_LOD_SPECS.LOD2, leafletKeep: 0.2 * d1 }, cards: { keepFraction: d1, skipDead: true } });
+    levels.push({ name: 'LOD4', distance: lodOpts.lod2Dist ?? 70, appOnly: true, radialSegs: 5, ringMaxSpacing: 1.6, ringKeepAngle: 35, spec: { ...FROND_LOD_SPECS.LOD2, leafletKeep: 0.12 * d2, bunches: false }, cards: { keepFraction: 0.6 * d2, skipDead: true, bunches: false } });
+  }
+
+  const lod = new LOD();
+  lod.name = `${species.name} (seed ${seed})`;
+  const stats = [];
+  let leaflets0 = 0;
+  for (const lv of levels) {
+    const level = new Group();
+    level.name = `${speciesSlug}_${lv.name}`;
+    level.userData.lodName = lv.name;
+    level.userData.hiddenInApp = !!lv.hiddenInApp;
+    level.userData.appOnly = !!lv.appOnly;
+    const meshParams = {
+      ...ind.params, radialSegs: lv.radialSegs,
+      ...(lv.ringMaxSpacing ? { ringMaxSpacing: lv.ringMaxSpacing, ringKeepAngle: lv.ringKeepAngle } : {}),
+    };
+    const trunkGeo = buildMergedMesh(stems, meshParams);
+    const useCards = !!(cards && lv.cards && layout);
+    let crown = null;
+    // Card rungs still mesh the fruit stalks (peduncles) as bark tubes — the
+    // cards carry the fronds, the instanced bunches hang from the stalk ends.
+    if (layout) crown = buildCrownGeometry(layout, ind.foliage, lv.spec, { skipDead: !!lv.cards?.skipDead, pedunclesOnly: useCards });
+    // Rachis tubes join the trunk: ONE bark mesh (branches slot).
+    const barkGeo = crown?.bark ? mergeIndexedGeometries([trunkGeo, crown.bark]) : trunkGeo;
+    if (barkGeo !== trunkGeo) { trunkGeo.dispose(); crown.bark.dispose(); }
+    const barkMat = assets.barkMat ?? makeBarkMaterial(assets);
+    const branches = new Mesh(barkGeo, barkMat);
+    branches.castShadow = true; branches.receiveShadow = true;
+    level.add(branches);
+    level.userData.barkMesh = branches;
+
+    let leafInstances = 0;
+    if (useCards) {
+      const fol = buildFrondCardFoliage(layout, cards, {
+        keepFraction: lv.cards.keepFraction, skipDead: !!lv.cards.skipDead,
+        bunches: lv.cards.bunches !== false, bunchMaterial: assets.leafMat, atlas: ind.foliage.atlas,
+      });
+      if (fol) {
+        fol.traverse((o) => { if (o.isInstancedMesh) leafInstances += o.count; });
+        level.add(fol);
+      }
+    } else if (crown?.leaves && assets.leafMat) {
+      // One merged, atlas-mapped leaves mesh (leaves slot). Named so the GLB
+      // export writes `<Species>_LODn_leaves` next to `_branches`.
+      const leaves = new Mesh(crown.leaves, assets.leafMat);
+      leaves.name = `${speciesSlug}_${lv.name}_leaves`;
+      leaves.castShadow = true; leaves.receiveShadow = true;
+      level.add(leaves);
+      leafInstances = crown.leaflets;
+    } else {
+      crown?.leaves?.dispose();
+    }
+    if (lv.name === 'LOD0') leaflets0 = leafInstances;
+    lod.addLevel(level, lv.distance, 0.05);
+    stats.push({ name: lv.name, distance: lv.distance, leafInstances });
+  }
+
+  lod.position.y = -(species.plantSink ?? 0.15);
+  lod.userData = {
+    species: species.name, seed,
+    mobileBuilt: !!lodOpts.mobileTarget,
+    stemCount: stems.length + (layout?.fronds.length ?? 0), tipCount: layout?.fronds.length ?? 0,
+    leafInstances: leaflets0, levels: stats,
+    palm: {
+      height: ind.height, lean: ind.lean, fronds: ind.frondCount, dead: ind.foliage.deadCount,
+      peduncles: layout?.peduncles?.length ?? 0,
+      bunchTops: layout?.bunches.map((b) => b.top.toArray().map((v) => +v.toFixed(3))) ?? [], // inspection/framing (tree-local)
+    },
+    stems,
+  };
+  return { group: lod, stems, tips: [] };
+}
+
 import { barkWindPosition, instancedBarkWindPosition } from './wind.js';
 import { texture, mix, smoothstep, positionWorld, uniform, float, vec3, uv, fract, abs } from 'three/tsl';
 import { mx_fractal_noise_float } from 'three/tsl';
@@ -714,6 +870,9 @@ export function buildTree(species, seed, assets = {}, lodOpts = {}, reuse = null
   // existing same-species LOD) rewrites its meshes in place to dodge the WebGPU
   // per-render-object pipeline recompile (the edit freeze). Oak path ignores it.
   if (species.foliageType === 'rosette' || species.foliageType === 'sprayClusters') return buildDichotomousTree(species, seed, assets, lodOpts, reuse);
+  // Palms: the dichotomous trunk with forking disabled + the pinnate frond
+  // builder for the crown (docs/frond-builder.md).
+  if (species.foliageType === 'fronds') return buildFrondTree(species, seed, assets, lodOpts);
 
   const rng = new Rng(`${species.name}:${seed}`);
   const { stems, tips } = generateSkeleton(species.params, rng);

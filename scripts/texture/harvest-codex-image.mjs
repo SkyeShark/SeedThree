@@ -61,12 +61,17 @@ function imagesFrom(sessionFile) {
     let o; try { o = JSON.parse(line); } catch { continue; }
     const p = o.payload;
     if (!p) continue;
-    if ((p.type === 'image_generation_call' || p.type === 'image_generation_end')
-        && typeof p.result === 'string' && p.result.length > 5000) {
-      const key = p.result.length + ':' + p.result.slice(0, 32);
+    // Older Codex logs: image_generation_call/_end records carry `result`.
+    // Newer logs (2026-09): an item_completed event whose item is an
+    // Extension of kind 'image_gen.generation' carries the same base64.
+    let result = null;
+    if (p.type === 'image_generation_call' || p.type === 'image_generation_end') result = p.result;
+    else if (p.type === 'item_completed' && p.item?.kind === 'image_gen.generation') result = p.item.result;
+    if (typeof result === 'string' && result.length > 5000) {
+      const key = result.length + ':' + result.slice(0, 32);
       if (seen.has(key)) continue;
       seen.add(key);
-      out.push(p.result);
+      out.push(result);
     }
   }
   return out;

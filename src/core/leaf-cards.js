@@ -167,7 +167,8 @@ export function makeFoliageMaterial(assets, cfg) {
   mat.normalNode = normalize(domeView.add(relief.mul(0.9)));
   // Willow curtains are one tree-space merged mesh. Their per-ring sway bends
   // the long vines; instanced-leaf local-Y flutter is intentionally disabled.
-  mat.positionNode = foliageWindPosition(c.mode !== 'willowCurtains', c.flutterScale);
+  // Palm fronds are one merged, atlas-mapped mesh too (frond-builder.js).
+  mat.positionNode = foliageWindPosition(c.mode !== 'willowCurtains' && c.mode !== 'fronds', c.flutterScale);
   // Backlit translucency (Barré-Brisebois SSS) — leaves glow when lit from behind,
   // which is what makes foliage read as living leaves instead of flat albedo cards.
   // Backlit transmission = (per-texel translucency map) × (per-instance random) ×

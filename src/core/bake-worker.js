@@ -51,7 +51,8 @@ self.onmessage = async (e) => {
           });
         }
 
-        const built = makeFoliageMaterial(assets, { ...cfg, mode: 'clusters' });
+        // Palm fronds are a merged mesh: keep their mode (no instanced flutter).
+        const built = makeFoliageMaterial(assets, { ...cfg, mode: cfg.mode === 'fronds' ? 'fronds' : 'clusters' });
         if (built.centerUniform) built.centerUniform.value.copy(center);
         return built.material;
       };
