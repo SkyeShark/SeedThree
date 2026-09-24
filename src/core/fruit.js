@@ -7,7 +7,7 @@
 
 import {
   InstancedMesh, InstancedBufferAttribute, Matrix4, Quaternion, Vector3,
-  MeshStandardNodeMaterial, Box3, DoubleSide,
+  MeshStandardNodeMaterial, Box3, DoubleSide, BufferGeometry, Float32BufferAttribute,
 } from 'three/webgpu';
 import { foliageWindPosition, WIND_DIR } from './wind.js';
 
@@ -169,4 +169,128 @@ export function buildFruits(terminalStems, cfg, rng, geometry, material, obstacl
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   return mesh;
+}
+
+// ---- atlas fruit: procedural, leaf-slot geometry ---------------------------
+// An alternative to orchard GLB fruit (which carries its own material) for
+// species that keep fruit on the leaf texture: a small lathe mesh UV-mapped
+// into regions of the species' LEAF ATLAS (a seamless skin swatch wrapped once
+// around, a darker swatch copy for the calyx/neck), rendered with the leaf
+// material itself, so the tree keeps two materials (bark + leaves). It carries a per-vertex
+// aThickness of 0: the leaf material (cfg.atlasFruit) reads that as "solid" →
+// true geometric normals, no SSS glow, no flutter. See docs/foliage-materials.md.
+//
+// cfg: { shape: 'pomegranate' | 'fig', radius (m), segments, atlas: { skin, calyx|neck } }
+// The geometry is authored stem-up and re-origined to the stem tip
+// (prepareFruitGeometry), exactly like a GLB fruit, so buildFruits hangs it.
+
+// profile: [[y, r, rectKey], …] top (stem) → bottom; y down is negative.
+function latheParts(profile, segs, atlas, pos, nrm, uvs, idx) {
+  // Arc length along the profile per part → v, so the swatch isn't smeared.
+  const rings = [];
+  for (let i = 0; i < profile.length; i++) {
+    const [y, r, key] = profile[i];
+    // Duplicate a ring where the rect changes (hard UV seam between parts).
+    if (i > 0 && profile[i - 1][2] !== key) rings.push({ y, r, key: profile[i - 1][2] });
+    rings.push({ y, r, key });
+  }
+  // per-part v extents
+  const parts = new Map();
+  for (let i = 0; i < rings.length; i++) {
+    const k = rings[i].key;
+    const prev = i > 0 && rings[i - 1].key === k ? rings[i - 1] : null;
+    const e = parts.get(k) ?? { len: 0 };
+    rings[i].s = e.len + (prev ? Math.hypot(rings[i].y - prev.y, rings[i].r - prev.r) : 0);
+    e.len = rings[i].s;
+    parts.set(k, e);
+  }
+  const base = pos.length / 3;
+  for (let i = 0; i < rings.length; i++) {
+    const { y, r, key, s } = rings[i];
+    const [u0, v0, u1, v1] = atlas[key];
+    const len = parts.get(key).len || 1;
+    // profile normal from neighbouring rings (same part)
+    const a = rings[Math.max(0, i - 1)], b = rings[Math.min(rings.length - 1, i + 1)];
+    // perpendicular to the profile tangent (dr, dy): (-dy, dr) in (r, y), flipped outward below
+    let nr = -(b.y - a.y), ny = (b.r - a.r);
+    const nl = Math.hypot(nr, ny) || 1; nr /= nl; ny /= nl;
+    if (nr < 0) { nr = -nr; ny = -ny; }
+    for (let j = 0; j <= segs; j++) {
+      const t = (j / segs) * Math.PI * 2;
+      const c = Math.cos(t), sn = Math.sin(t);
+      pos.push(r * c, y, r * sn);
+      nrm.push(nr * c, ny, nr * sn);
+      uvs.push(u0 + (j / segs) * (u1 - u0), v1 - (s / len) * (v1 - v0));
+    }
+  }
+  const row = segs + 1;
+  for (let i = 0; i < rings.length - 1; i++) {
+    if (rings[i].key !== rings[i + 1].key) continue; // seam duplicate: no strip
+    for (let j = 0; j < segs; j++) {
+      const a = base + i * row + j, b = a + row;
+      // skip degenerate strips at a closed pole
+      if (rings[i].r > 1e-5) idx.push(a, a + 1, b);
+      if (rings[i + 1].r > 1e-5) idx.push(a + 1, b + 1, b);
+    }
+  }
+}
+
+// Far-rung twin (LOD1/LOD2): fewer sides and rings, no stalk/neck tube.
+export function makeAtlasFruitGeometryLow(cfg) {
+  return makeAtlasFruitGeometry({ ...cfg, segments: 6, rings: 4, lowPoly: true });
+}
+
+export function makeAtlasFruitGeometry(cfg) {
+  const R = cfg.radius ?? 0.045;
+  const segs = cfg.segments ?? 10;
+  const atlas = cfg.atlas;
+  const pos = [], nrm = [], uvs = [], idx = [];
+  if (cfg.shape === 'fig') {
+    // Pear/teardrop: narrow green neck at the stem, bulbous body, flattened
+    // bottom (ostiole). Length ≈ 2.4 R.
+    const H = 2.4 * R;
+    const prof = [
+      [0, 0.12, 'neck'], [-0.06, 0.2, 'neck'], [-0.16, 0.34, 'neck'], [-0.28, 0.55, 'skin'],
+      [-0.42, 0.8, 'skin'], [-0.58, 0.97, 'skin'], [-0.73, 1.0, 'skin'], [-0.86, 0.9, 'skin'],
+      [-0.95, 0.62, 'skin'], [-1.0, 0.0, 'skin'],
+    ].map(([y, r, k]) => [y * H, r * R, k]);
+    latheParts(prof, segs, atlas, pos, nrm, uvs, idx);
+    // short stalk on top (neck swatch; hero only)
+    if (!cfg.lowPoly) latheParts([[0.012, 0.0, 'neck'], [0.012, 0.1 * R, 'neck'], [0, 0.12 * R, 'neck']], 5, atlas, pos, nrm, uvs, idx);
+  } else {
+    // Pomegranate: slightly oblate globe + a crown-like calyx at the blossom
+    // end (bottom): a short neck flaring into 6 pointed sepal teeth.
+    const prof = [];
+    const rings = cfg.rings ?? 7;
+    for (let i = 0; i <= rings; i++) {
+      const th = (i / rings) * Math.PI; // 0 top → π bottom
+      prof.push([-(1 - Math.cos(th)) * R * 0.93, Math.sin(th) * R, 'skin']);
+    }
+    // stem stub at the top (hero only)
+    if (!cfg.lowPoly) latheParts([[0.01, 0.0, 'calyx'], [0.01, 0.07 * R, 'calyx'], [0, 0.09 * R, 'calyx']], 5, atlas, pos, nrm, uvs, idx);
+    latheParts(prof, segs, atlas, pos, nrm, uvs, idx);
+    const yb = -1.86 * R; // bottom pole
+    // calyx neck (open tube) below the globe (hero only)
+    if (!cfg.lowPoly) latheParts([[yb + 0.12 * R, 0.34 * R, 'calyx'], [yb - 0.16 * R, 0.27 * R, 'calyx'], [yb - 0.28 * R, 0.34 * R, 'calyx']], 6, atlas, pos, nrm, uvs, idx);
+    // sepal teeth: 6 flared triangles (two-sided by the DoubleSide material)
+    const [u0, v0, u1, v1] = atlas.calyx;
+    const teeth = 6;
+    for (let t = 0; t < teeth; t++) {
+      const a0 = ((t - 0.4) / teeth) * Math.PI * 2, a1 = ((t + 0.4) / teeth) * Math.PI * 2, am = (t / teeth) * Math.PI * 2;
+      const b = pos.length / 3;
+      const yr = cfg.lowPoly ? yb + 0.04 * R : yb - 0.28 * R, rr = cfg.lowPoly ? 0.3 * R : 0.34 * R;
+      pos.push(rr * Math.cos(a0), yr, rr * Math.sin(a0), rr * Math.cos(a1), yr, rr * Math.sin(a1),
+        0.56 * R * Math.cos(am), yr - 0.42 * R, 0.56 * R * Math.sin(am));
+      for (let k = 0; k < 3; k++) nrm.push(Math.cos(am) * 0.6, -0.8, Math.sin(am) * 0.6);
+      uvs.push(u0, v0, u1, v0, (u0 + u1) / 2, v1);
+      idx.push(b, b + 1, b + 2);
+    }
+  }
+  const g = new BufferGeometry();
+  g.setAttribute('position', new Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new Float32BufferAttribute(nrm, 3));
+  g.setAttribute('uv', new Float32BufferAttribute(uvs, 2));
+  g.setAttribute('aThickness', new Float32BufferAttribute(new Float32Array(pos.length / 3), 1));
+  g.setIndex(idx);
+  return prepareFruitGeometry(g);
 }

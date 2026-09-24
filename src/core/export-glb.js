@@ -5,7 +5,7 @@
 // and one `<name>_branches` mesh. DCC imports stay clean — no dependence on
 // EXT_mesh_gpu_instancing, whose Blender import scatters instanced cards.
 
-import { Box3, Vector3, Group, Mesh, Matrix4 } from 'three/webgpu';
+import { Box3, Vector3, Group, Mesh, Matrix4, BufferAttribute, FrontSide } from 'three/webgpu';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
@@ -104,6 +104,42 @@ function expandInstances(im, bend = 0, center = null) {
   return geos;
 }
 
+// A copy of an (indexed) geometry with every triangle's winding reversed and the
+// SAME vertex normals. Paired with the original it makes a single-sided card that
+// shows the same outward (dome) normal from both sides — see singleSidedCards.
+function reversedWinding(geo) {
+  const r = geo.clone();
+  const a = r.index.array.slice();
+  for (let i = 0; i < a.length; i += 3) { const t = a[i + 1]; a[i + 1] = a[i + 2]; a[i + 2] = t; }
+  r.setIndex(new BufferAttribute(a, 1));
+  return r;
+}
+
+// Opt-in single-sided dome-card export (leaf material userData.exportSingleSided,
+// set from foliage.singleSidedExport). The live shader shades both faces of a
+// card with the OUTWARD canopy-dome normal, but a glTF `doubleSided` material
+// makes a conformant renderer flip the normal on the back face — so half of the
+// exported crown's card faces shade as if they faced into the canopy. For
+// opted-in species the dome-bent card piles are written as BOTH windings with
+// the same outward normals, and the leaf material is exported single-sided
+// (doubleSided: false) through a per-export copy: each face carries the normal
+// the app shades it with. Fruit (solid, bend 0) is kept as is. Species without
+// the flag export byte-identically.
+const singleSidedCards = (material) => !!material?.userData?.exportSingleSided;
+
+// A FrontSide copy of an opted-in material, so the export never touches the
+// live material. A SHALLOW copy (same prototype, same textures / nodes /
+// userData references): `material.clone()` is not usable here — node
+// materials drop their map/normalMap/roughnessMap on copy() and Material.copy
+// JSON-round-trips userData (the transmission texture). The copy is never
+// rendered and is not disposed: it shares the original's event listeners, so a
+// dispose() on it would release the LIVE material's GPU resources.
+function singleSidedCopy(material) {
+  const copy = Object.assign(Object.create(Object.getPrototypeOf(material)), material);
+  copy.side = FrontSide;
+  return copy;
+}
+
 // Rebuild the LOD tree as plain groups with baked geometry: per level one
 // `_branches` mesh and one `_leaves` mesh (material groups keep card variants).
 function buildExportTree(lodRoot) {
@@ -111,6 +147,13 @@ function buildExportTree(lodRoot) {
   root.name = lodRoot.name;
   root.position.copy(lodRoot.position);
   const disposables = [];
+  // Opt-in pile merge (species foliage.mergeExportPiles → LOD root userData,
+  // core/tree.js): GLTFExporter writes one primitive per geometry group, so the
+  // instanced piles that share a material (leaf cards, accent cards and atlas
+  // fruit on one leaf-atlas material; a palm's frond-card piles) are merged into
+  // one group first → one primitive per material. Species without the flag keep
+  // one group per pile and export exactly as before.
+  const mergeByMaterial = !!lodRoot.userData?.exportMergePiles;
 
   for (const level of lodRoot.levels) {
     const src = level.object;
@@ -130,7 +173,16 @@ function buildExportTree(lodRoot) {
     });
 
     for (const [i, mesh] of plain.entries()) {
-      const out = new Mesh(mesh.geometry, mesh.material);
+      // Opt-in attribute whitelist (palm frond leaves: a merged mesh whose wind /
+      // SSS attributes are shader-only) — engines get position/normal/uv only.
+      let geo = mesh.geometry;
+      const keepAttrs = geo.userData?.exportAttributes;
+      if (keepAttrs) {
+        geo = geo.clone();
+        for (const name of Object.keys(geo.attributes)) if (!keepAttrs.includes(name)) geo.deleteAttribute(name);
+        disposables.push(geo);
+      }
+      const out = new Mesh(geo, mesh.material);
       out.name = mesh.name || `${src.name}_branches${plain.length > 2 ? `_${i}` : ''}`;
       lg.add(out);
     }
@@ -151,19 +203,49 @@ function buildExportTree(lodRoot) {
         const domeOrigin = im.boundingSphere.center.clone();
         domeOrigin.y = im.boundingBox.min.y - 0.5;
         const bend = im.name === 'fruit' ? 0 : 0.85;
-        const merged = mergeGeometries(expandInstances(im, bend, domeOrigin), false);
+        let merged = mergeGeometries(expandInstances(im, bend, domeOrigin), false);
         disposables.push(merged);
+        if (bend > 0 && singleSidedCards(im.material)) {
+          const back = reversedWinding(merged);
+          merged = mergeGeometries([merged, back], false);
+          disposables.push(back, merged);
+        }
         return { geo: merged, material: im.material };
       });
-      const geo = mergeGeometries(piles.map((p) => p.geo), true);
+      let grouped = piles;
+      if (mergeByMaterial) {
+        const byMat = new Map(); // material → its piles, in first-seen order
+        for (const p of piles) {
+          if (!byMat.has(p.material)) byMat.set(p.material, []);
+          byMat.get(p.material).push(p.geo);
+        }
+        grouped = [...byMat.entries()].map(([material, geos]) => {
+          if (geos.length === 1) return { geo: geos[0], material };
+          const g = mergeGeometries(geos, false);
+          disposables.push(g);
+          return { geo: g, material };
+        });
+      }
+      const geo = mergeGeometries(grouped.map((p) => p.geo), true);
       disposables.push(geo);
-      const leaves = new Mesh(geo, piles.map((p) => p.material));
+      const leaves = new Mesh(geo, grouped.map((p) => p.material));
       leaves.name = `${src.name}_leaves`;
       lg.add(leaves);
     }
 
     root.add(lg);
   }
+  // Opted-in dome-card materials export single-sided via per-export copies.
+  const sided = new Map();
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    const swap = (m) => {
+      if (!singleSidedCards(m)) return m;
+      if (!sided.has(m)) sided.set(m, singleSidedCopy(m));
+      return sided.get(m);
+    };
+    o.material = Array.isArray(o.material) ? o.material.map(swap) : swap(o.material);
+  });
   return { root, dispose: () => disposables.forEach((g) => g.dispose()) };
 }
 

@@ -19,6 +19,10 @@ import { weepingWillow } from './weeping-willow.js';
 import { creosote } from './creosote.js';
 import { blackbrush } from './blackbrush.js';
 import { sagebrush } from './sagebrush.js';
+import { datePalm } from './date-palm.js';
+import { pomegranate } from './pomegranate.js';
+import { fig } from './fig.js';
+import { tamarisk } from './tamarisk.js';
 
 export const SPECIES = {
   whiteOak,
@@ -41,6 +45,10 @@ export const SPECIES = {
   creosote,
   blackbrush,
   sagebrush,
+  datePalm,
+  pomegranate,
+  fig,
+  tamarisk,
 };
 
 export const DEFAULT_SPECIES = 'whiteOak';

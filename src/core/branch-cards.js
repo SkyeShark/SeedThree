@@ -18,14 +18,14 @@ import {
   OrthographicCamera, Box3, Vector3, Quaternion, Matrix4, Color, DoubleSide, MeshSSSNodeMaterial,
 } from 'three/webgpu';
 import {
-  texture, uniform, positionWorld, attribute, cameraViewMatrix, vec3, vec4, float, mix, mrt, output, normalView,
+  texture, uniform, positionWorld, attribute, cameraViewMatrix, vec3, vec4, float, mix, mrt, output, normalView, Fn,
 } from 'three/tsl';
 import { Rng } from './rng.js';
 import { generateSkeleton } from './weber-penn.js';
 import { generateDichotomous, buildMergedMesh } from './dichotomous.js';
 import { buildYuccaFoliage } from './yucca-leaves.js';
 import { buildBranchGeometry } from './branch-mesh.js';
-import { buildFoliage, addThicknessAttribute } from './leaf-cards.js';
+import { buildFoliage, addThicknessAttribute, buildAccentCards } from './leaf-cards.js';
 import { buildFruits } from './fruit.js';
 import { bakeGroupToTextures } from './impostor.js';
 import { foliageWindPosition, sunDirectionUniform, WIND_DIR } from './wind.js';
@@ -223,7 +223,7 @@ function bowedCardGeometry(
 
 // Same material family + dome-normal blend as LOD0 leaves — matched diffuse
 // response across the LOD switch is what hides the pop (proxy-normal transfer).
-function makeCardMaterial(t, centerUniform, opts = {}) {
+export function makeCardMaterial(t, centerUniform, opts = {}) {
   const mat = new MeshSSSNodeMaterial({
     map: t.albedo, normalMap: t.normal, roughnessMap: t.rough,
     alphaTest: 0.35, side: DoubleSide, roughness: 1.0, metalness: 0.0,
@@ -240,14 +240,22 @@ function makeCardMaterial(t, centerUniform, opts = {}) {
   // Same canopy sway as the leaves; noFlutter for CROSSED (limb) card sets — the
   // random-phase flutter tears a crossed pair apart at the seam (see wind.js).
   mat.positionNode = foliageWindPosition(!opts.noFlutter);
-  const transmit = uniform(new Color().setRGB(...TRANSMIT));
+  // Species backlight colour + opt-in shadow floor carried over from the LOD0
+  // leaf material (foliage.transmit / selfShadowFloor, leaf-cards.js) so the
+  // card rung shades like the leaves it replaces; defaults unchanged.
+  const tr = opts.transmit ?? TRANSMIT;
+  const transmit = uniform(new Color().setRGB(...tr));
+  if (opts.selfShadowFloor != null) {
+    const floor = uniform(opts.selfShadowFloor);
+    mat.receivedShadowNode = Fn(([shadow]) => shadow.mul(float(1).sub(floor)).add(floor));
+  }
   mat.thicknessColorNode = texture(t.trans).r.mul(attribute('aThickness', 'float')).mul(transmit);
   mat.thicknessDistortionNode = uniform(0.3);
   mat.thicknessAmbientNode = uniform(0.16); // scatter floor — see leaf-cards.js
   mat.thicknessAttenuationNode = uniform(1.0);
   mat.thicknessPowerNode = uniform(6.0);
   mat.thicknessScaleNode = uniform(3.0);
-  mat.userData.gltfDiffuseTransmission = { factor: 1.0, color: TRANSMIT, map: t.trans };
+  mat.userData.gltfDiffuseTransmission = { factor: 1.0, color: tr, map: t.trans };
   // Flat proxy cards are receivers neither for N8AO darkening nor crossed-plane
   // crease artifacts. Keep their bent normal in the MRT, but write aomask=0.
   mat.mrtNode = mrt({ output, normal: normalView, aomask: float(0) });
@@ -277,6 +285,11 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
     ?? species.params?.terminalFloorMin
     ?? 0;
 
+  // See-through crowns (foliage.selfShadowFloor, e.g. tamarisk) carry their
+  // backlight colour + shadow floor onto the card rung; every other species
+  // keeps the stock card shading.
+  const cardShade = species.foliage?.selfShadowFloor != null
+    ? { transmit: species.foliage.transmit, selfShadowFloor: species.foliage.selfShadowFloor } : {};
   // Fixed exemplar seed → deterministic cards independent of the live tree seed.
   const rng = new Rng(`${species.name}:cards`);
   const { stems } = generateSkeleton(species.params, rng);
@@ -367,11 +380,17 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
     // the real fruit instances, so without this the tree visibly de-fruits at
     // the LOD2 switch. Anchored on the same (possibly straightened) stems the
     // leaves use — the card rotates as one picture at place time.
-    if (species.fruit && assets.fruitGeo && assets.fruitMat) {
+    // (Atlas fruit rides the card rung as real low-poly fruit instead — tree.js.)
+    if (species.fruit && assets.fruitGeo && assets.fruitMat && !species.fruit.atlas) {
       const fruitRng = new Rng(`${species.name}:cards:fruit:${vi}`);
       const perCard = { ...species.fruit, bakeCard: true, maxCount: 5, perBranch: 1 };
       const fruit = buildFruits(bakeStems, perCard, fruitRng, assets.fruitGeo, assets.fruitMat);
       if (fruit) group.add(fruit);
+    }
+    // Accent cards (atlas flowers) bake into the cards like fruit.
+    if (species.foliage?.accents?.length && assets.leafMat) {
+      const baked = { ...species.foliage, accents: species.foliage.accents.filter((a) => a.cardBake !== false) };
+      for (const m of buildAccentCards(bakeStems, baked, new Rng(`${species.name}:cards:accents:${vi}`), assets.leafMat)) group.add(m);
     }
     if (!group.children.length) continue; // foliage-only exemplar with no leaves → nothing to bake
 
@@ -442,13 +461,13 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
       sgeo.attributes.aThickness.array.set(geometry.attributes.aThickness.array);
       side = {
         geometry: sgeo,
-        material: makeCardMaterial(bakedAll.side, centerUniform, { noFlutter: opts.noFlutter }),
+        material: makeCardMaterial(bakedAll.side, centerUniform, { noFlutter: opts.noFlutter, ...cardShade }),
         textures: bakedAll.side,
       };
     }
     variants.push({
       geometry,
-      material: makeCardMaterial(baked, centerUniform, { noFlutter: opts.noFlutter }),
+      material: makeCardMaterial(baked, centerUniform, { noFlutter: opts.noFlutter, ...cardShade }),
       textures: baked,
       side,
       chordLen: stemArcLen(stem), // ARC length (stable), not the collapsing chord

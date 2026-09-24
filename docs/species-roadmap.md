@@ -61,19 +61,33 @@ saguaros — the Sonoran scene reads underdressed without at least one of them.
     segment mesher (lofted disc pairs) though placement/L-system logic can
     reuse the dichotomous fork grammar. The desert floor wants it badly
     (see reference photo) — best first Tier-3 investment.
-11. **Fan palm** (*Washingtonia*) — trunk machinery exists (shaggy thatch
-    skirt = our Joshua thatch idea at trunk scale!), but pinnate/palmate
-    fronds need a real frond builder (curved blade strips with droop), not
-    nested cones. Pairs with a future "oasis" biome.
+11. **Fan palm** (*Washingtonia*) — the frond builder now EXISTS
+    ([`frond-builder.md`](frond-builder.md), shipped with the date palm):
+    trunk, crown layout, droop, dead-frond skirt (the shaggy Washingtonia
+    skirt = a dense `deadCount` / high `deadKeep` skirt), LODs and frond
+    cards are shared. What remains is the PALMATE leaflet placer (fanned,
+    pleated segments on a short costa — see the doc's §7) plus a pleated-
+    segment atlas piece. Now a Tier-2 item. Pairs with a future "oasis" biome.
+    - ✅ **Date palm** (*Phoenix dactylifera*) — DONE: pinnate frond builder
+      (curved rachis + V-folded multi-plane leaflet cards + spines), dead
+      skirt, date bunches, offshoots, baked frond-card LOD2. Uses the `desert`
+      biome for now (a riverine/oasis biome would ripple into scenes + audio).
 12. **Ponderosa-style deadwood snag** — not a species so much as a variant
     flag (foliage off + bark weathering tint + branch prune high); nearly
     free and adds enormous realism scattered through both biomes. Could ship
     as a `snag: true` preset toggle any time.
+13. ✅ **Arid garden trees** (*Punica granatum*, *Ficus carica*, *Tamarix
+    aphylla*) — DONE on the Weber–Penn generator with a small new feature: a
+    leaf ATLAS (fruit skin + flower cards on the leaf texture), accent flower
+    cards, procedural atlas fruit, and see-through-crown material knobs for the
+    tamarisk; see [`foliage-materials.md`](foliage-materials.md) "Leaf atlas +
+    atlas fruit". Uses the `desert` biome.
 
 ## Suggested order
 
 Birch → Mojave yucca → barrel cactus → aspen → agave → sycamore/dogwood →
-cholla prototype → willow → prickly pear (feature) → palm (feature).
+cholla prototype → willow → prickly pear (feature) → ~~palm (feature)~~ date
+palm done (frond builder) → fan palm (palmate placer).
 
 Each Tier-1/2 species: 1 bark set + 1-2 leaf/blade cards via the Codex
 `$imagegen → scripts/texture/` pipeline, a preset file, and a HUD/LOD sanity

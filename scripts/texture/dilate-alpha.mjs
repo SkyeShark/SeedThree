@@ -5,7 +5,15 @@
 // halo/fringe around every leaf. Fix: flood the opaque edge colours outward into
 // the transparent region (RGB only; alpha is preserved so alphaTest is unchanged).
 //
-// Usage: node scripts/texture/dilate-alpha.mjs <cutout.png> [--passes 20]  (overwrites in place)
+// Usage: node scripts/texture/dilate-alpha.mjs <cutout.png> [--passes 20] [--fill]  (overwrites in place)
+// --fill: after the passes, fill EVERY still-empty texel by pull-push (the
+// nearest coarser-mip average of opaque colour) — thin sprays on a big atlas
+// otherwise keep black texels that bleed into the far mips (dark/navy cards).
+// --fill-rect u0,v0,u1,v1 (repeatable, three.js UV, v up): AFTER the fill, every
+// transparent texel inside the rect takes the mean colour of that rect's
+// green-dominant opaque texels (the leaves). A sparse leaf spray on a brown
+// twig otherwise mips to olive-brown at distance (the fill mixes twig, skin and
+// flower colours into the leaf's far mips).
 
 import sharp from 'sharp';
 
@@ -47,6 +55,56 @@ for (let p = 0; p < passes; p++) {
   }
   filled.set(next);
   if (!changed) break;
+}
+
+if (process.argv.includes('--fill')) {
+  // pull: weighted box pyramid of (colour × filled, filled)
+  const levels = [];
+  let lw = W, lh = H;
+  let col = new Float32Array(W * H * 3), wt = new Float32Array(W * H);
+  for (let i = 0; i < W * H; i++) if (filled[i]) { wt[i] = 1; col[i * 3] = rgb[i * 3]; col[i * 3 + 1] = rgb[i * 3 + 1]; col[i * 3 + 2] = rgb[i * 3 + 2]; }
+  levels.push({ w: lw, h: lh, col, wt });
+  while (lw > 1 || lh > 1) {
+    const nw = Math.max(1, lw >> 1), nh = Math.max(1, lh >> 1);
+    const nc = new Float32Array(nw * nh * 3), nwt = new Float32Array(nw * nh);
+    for (let y = 0; y < lh; y++) for (let x = 0; x < lw; x++) {
+      const si = y * lw + x, di = Math.min(nh - 1, y >> 1) * nw + Math.min(nw - 1, x >> 1);
+      nwt[di] += wt[si]; nc[di * 3] += col[si * 3]; nc[di * 3 + 1] += col[si * 3 + 1]; nc[di * 3 + 2] += col[si * 3 + 2];
+    }
+    levels.push({ w: nw, h: nh, col: nc, wt: nwt });
+    lw = nw; lh = nh; col = nc; wt = nwt;
+  }
+  // push: each empty texel takes the finest level that has coverage there
+  let filledN = 0;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y * W + x;
+    if (filled[i]) continue;
+    for (let l = 1; l < levels.length; l++) {
+      const L = levels[l];
+      const lx = Math.min(L.w - 1, x >> l), ly = Math.min(L.h - 1, y >> l), li = ly * L.w + lx;
+      if (L.wt[li] > 0) { rgb[i * 3] = L.col[li * 3] / L.wt[li]; rgb[i * 3 + 1] = L.col[li * 3 + 1] / L.wt[li]; rgb[i * 3 + 2] = L.col[li * 3 + 2] / L.wt[li]; filledN++; break; }
+    }
+  }
+  console.log(`pull-push filled ${filledN} texels`);
+}
+
+for (let ai = 0; ai < process.argv.length; ai++) {
+  if (process.argv[ai] !== '--fill-rect') continue;
+  const [u0, v0, u1, v1] = process.argv[ai + 1].split(',').map(Number);
+  const x0 = Math.round(u0 * W), x1 = Math.round(u1 * W), y0 = Math.round((1 - v1) * H), y1 = Math.round((1 - v0) * H);
+  let r = 0, g = 0, b = 0, n = 0;
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+    const i = y * W + x;
+    if (alpha[i] > 128 && rgb[i * 3 + 1] >= rgb[i * 3] && rgb[i * 3 + 1] >= rgb[i * 3 + 2] * 0.9) { r += rgb[i * 3]; g += rgb[i * 3 + 1]; b += rgb[i * 3 + 2]; n++; }
+  }
+  if (!n) continue;
+  r /= n; g /= n; b /= n;
+  let k = 0;
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+    const i = y * W + x;
+    if (alpha[i] < 8) { rgb[i * 3] = r; rgb[i * 3 + 1] = g; rgb[i * 3 + 2] = b; k++; }
+  }
+  console.log(`fill-rect ${process.argv[ai + 1]}: ${k} texels ← leaf mean (${r | 0},${g | 0},${b | 0})`);
 }
 
 const out = Buffer.alloc(W * H * 4);

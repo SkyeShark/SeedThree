@@ -31,9 +31,10 @@ import {
   controlsFromSpecies, applySpeciesControls, ADVANCED_LEVEL_PARAMS, CROWN_SHAPES,
 } from '../ui/controls.js';
 import {
-  buildTree, makeBarkMaterial, makeCactusBarkMaterial, makeThatchBarkMaterial,
+  buildTree, makeBarkMaterial, makeCactusBarkMaterial, makeThatchBarkMaterial, individualizePalm,
 } from '../core/tree.js';
 import { makeFoliageMaterial } from '../core/leaf-cards.js';
+import { makeAtlasFruitGeometry, makeAtlasFruitGeometryLow } from '../core/fruit.js';
 import { makeYuccaMaterial } from '../core/yucca-leaves.js';
 import { makeSpineMaterial } from '../core/cactus-spines.js';
 import { generateSkeleton } from '../core/weber-penn.js';
@@ -60,7 +61,8 @@ export function listSpecies() {
   return Object.entries(SPECIES).map(([key, sp]) => ({
     key, name: sp.name, latin: sp.latin ?? null, biome: sp.biome ?? null,
     foliageType: sp.foliageType ?? 'leaves', cactus: !!sp.cactus,
-    generator: (sp.foliageType === 'rosette' || sp.foliageType === 'sprayClusters') ? 'dichotomous-lsystem' : 'weber-penn',
+    generator: sp.foliageType === 'fronds' ? 'dichotomous-trunk+fronds'
+      : (sp.foliageType === 'rosette' || sp.foliageType === 'sprayClusters') ? 'dichotomous-lsystem' : 'weber-penn',
   }));
 }
 
@@ -83,7 +85,13 @@ function globalKnobs(sp) {
     { key: 'barkTint', name: 'Bark tint', group: 'material', type: 'color', default: 0xffffff },
     { key: 'barkFlat', name: 'Bark flat shading', group: 'material', type: 'bool', default: false },
   ];
-  if (!rosette) out.push(
+  const fronds = sp.foliageType === 'fronds';
+  if (fronds) out.push(
+    { key: 'leafColorize', name: 'Leaf tint', group: 'material', type: 'color', default: 0xffffff },
+    { key: 'leafTintAmount', name: 'Leaf tint amount', group: 'material', min: 0, max: 1, step: 0.01, default: 0 },
+    { key: 'leafAlpha', name: 'Leaf alpha test', group: 'material', min: 0, max: 1, step: 0.01, default: sp.foliage?.alphaTest ?? 0.4 },
+  );
+  if (!rosette && !fronds) out.push(
     { key: 'leafColorize', name: 'Leaf tint', group: 'material', type: 'color', default: 0xffffff },
     { key: 'leafTintAmount', name: 'Leaf tint amount', group: 'material', min: 0, max: 1, step: 0.01, default: 0 },
     { key: 'leafAngle', name: 'Leaf angle', group: 'material', min: 0, max: 100, step: 1, default: sp.foliage?.downAngle ?? 52 },
@@ -139,7 +147,8 @@ export const LOD_OPTIONS = [
  */
 export function getSchema(speciesKey) {
   const sp = speciesOrThrow(speciesKey);
-  const rosette = sp.foliageType === 'rosette';
+  // Palms (fronds) use the same flat advanced-dial list as the rosette path.
+  const rosette = sp.foliageType === 'rosette' || sp.foliageType === 'fronds';
   const shape = (sp.controls ?? []).map((e) => knob(e, sp, 'shape'));
 
   let advanced;
@@ -170,7 +179,7 @@ export function getSchema(speciesKey) {
   return {
     species: speciesKey, name: sp.name, latin: sp.latin ?? null, biome: sp.biome ?? null,
     foliageType: sp.foliageType ?? 'leaves', cactus: !!sp.cactus,
-    generator: rosette ? 'dichotomous-lsystem' : 'weber-penn',
+    generator: sp.foliageType === 'fronds' ? 'dichotomous-trunk+fronds' : rosette ? 'dichotomous-lsystem' : 'weber-penn',
     shape, advanced, global: globalKnobs(sp),
     lod: LOD_OPTIONS.filter((o) => !o.temperateOnly || !rosette),
   };
@@ -309,6 +318,11 @@ export function statsOf(group) {
 export function skeleton({ species, seed = 1, controls = {} } = {}) {
   const sp = speciesOrThrow(species);
   const shaped = applySpeciesControls(sp, mergeControls(species, controls, seed));
+  if (sp.foliageType === 'fronds') {
+    const ind = individualizePalm(shaped, seed);
+    const { stems } = generateDichotomous(ind.params, new Rng(`${sp.name}:${seed}`));
+    return { generator: 'dichotomous-trunk+fronds', stems: stems.length, fronds: ind.frondCount, trunkHeight: +ind.height.toFixed(2), lean: +ind.lean.toFixed(1) };
+  }
   if (sp.foliageType === 'rosette') {
     const skParams = { ...shaped.params, tipClearance: (shaped.foliage?.leafLen ?? 0.5) * 0.9 };
     const { stems, terminalStems } = generateDichotomous(skParams, new Rng(`${sp.name}:${seed}`));
@@ -382,14 +396,20 @@ function composeMaterials(sp, assets, sunLight = null) {
     assets.frondGreenTint = yucca.greenTint; assets.frondDryTint = yucca.dryTint;
     assets.frondDryestTint = yucca.dryestTint; assets.frondDryness = yucca.dryness;
   } else if (!sp.cactus) {
-    const directMode = sp.foliage?.mode === 'willowCurtains'
-      ? 'willowCurtains' : 'leaves';
+    const directMode = (sp.foliage?.mode === 'willowCurtains' || sp.foliage?.mode === 'fronds')
+      ? sp.foliage.mode : 'leaves';
     const leafFol = makeFoliageMaterial(assets, { ...sp.foliage, mode: directMode });
     assets.leafMat = leafFol.material; assets.leafCenter = leafFol.centerUniform;
     assets.leafTintNode = leafFol.tintNode; assets.leafTintAmount = leafFol.tintAmount;
     const clusterFol = makeFoliageMaterial(assets, { ...sp.foliage, mode: 'clusters' });
     assets.clusterMat = clusterFol.material; assets.clusterCenter = clusterFol.centerUniform;
     assets.clusterTintNode = clusterFol.tintNode; assets.clusterTintAmount = clusterFol.tintAmount;
+  }
+  // Atlas fruit rides the leaf material (main.js twin) — it grows headless too.
+  if (sp.fruit?.atlas && assets.leafMat) {
+    assets.fruitGeo = makeAtlasFruitGeometry(sp.fruit);
+    assets.fruitGeoLow = makeAtlasFruitGeometryLow(sp.fruit);
+    assets.fruitMat = assets.leafMat;
   }
   return assets;
 }
