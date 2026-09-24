@@ -109,6 +109,41 @@ test('GLB pile merge is opt-in: Joshua tree keeps its per-pile leaves primitives
   assert.equal(await leavesPrimitives('tamarisk', 1), 1, 'tamarisk (opted in) merges to one leaves primitive');
 });
 
+// Opt-in single-sided export (foliage.singleSidedExport): dome-normal cards must
+// not export doubleSided — back faces would flip the outward canopy normal.
+async function exportLeaves(key, seed, keepFlag) {
+  const { group } = generate({ species: key, seed });
+  const swap = new Map();
+  group.traverse((o) => {
+    if (!o.isMesh) return;
+    if (!swap.has(o.material)) {
+      const m = new MeshStandardMaterial({ side: o.material.side });
+      if (keepFlag && o.material.userData?.exportSingleSided) m.userData.exportSingleSided = true;
+      swap.set(o.material, m);
+    }
+    o.material = swap.get(o.material);
+  });
+  const before = [...swap.values()].map((m) => m.side);
+  const json = glbJson(await exportGLB(group));
+  const slug = group.levels[0].object.name;
+  const prim = json.meshes[json.nodes.find((n) => n.name === `${slug}_leaves`).mesh].primitives[0];
+  const after = [...swap.values()].map((m) => m.side);
+  return { mat: json.materials[prim.material], indices: json.accessors[prim.indices].count, before, after };
+}
+
+test('opted-in leaves export single-sided with both windings; live materials untouched; other species unchanged', async () => {
+  for (const key of SPECIES_KEYS) {
+    const on = await exportLeaves(key, 2, true);
+    const off = await exportLeaves(key, 2, false);
+    assert.ok(!on.mat.doubleSided, `${key}: leaves material exported single-sided`);
+    assert.equal(off.mat.doubleSided, true, `${key}: without the flag the leaves stay doubleSided`);
+    assert.ok(on.indices > off.indices * 1.5, `${key}: dome cards (not the solid fruit) carry both windings (${on.indices} vs ${off.indices})`);
+    assert.deepEqual(on.after, on.before, `${key}: the export never changes the live materials' side`);
+  }
+  const oak = await exportLeaves('whiteOak', 1, true);
+  assert.equal(oak.mat.doubleSided, true, 'white oak leaves unchanged (no opt-in)');
+});
+
 test('pomegranate + fig fruit hangs in the leaf slot; fruit toggle removes it', () => {
   for (const key of ['pomegranate', 'fig']) {
     const on = generate({ species: key, seed: 3 });

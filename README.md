@@ -30,7 +30,7 @@ A fully procedural tree and plant generator: pick a species, tune its parameters
 - **LOD chain + impostors.** LOD0 full geometry → reduced-geometry LOD1 → baked branch-card LOD2 → a 2-plane billboard impostor, baked off-thread in a Web Worker so the viewer never stalls. Per-LOD density & branch-prune dials.
 - **A living scene.** Instanced forest ring with per-instance LOD, wind-animated grass & desert scrub, procedural rocks, fallen dead limbs resting on the terrain, PBR terrain with slope/height material blending, volumetric-ish clouds, and a movable sun.
 - **Ambient audio.** Per-biome wind bed (seamless loop) + randomly interspersed bird calls, with a mute toggle.
-- **glTF export.** One click writes a `.glb` with merged per-LOD meshes and standard `KHR_materials_*` extensions (incl. leaf transmission).
+- **glTF export.** One click writes a `.glb` with merged per-LOD meshes and standard `KHR_materials_*` extensions (incl. leaf transmission). Species can opt into one leaves primitive per LOD and single-sided dome-normal leaf cards for engines that flip back-face normals (`foliage.mergeExportPiles` / `foliage.singleSidedExport`, see [`docs/foliage-materials.md`](docs/foliage-materials.md)).
 
 ## Requirements
 

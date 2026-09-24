@@ -245,6 +245,9 @@ export function makeFoliageMaterial(assets, cfg) {
     color: tr,
     map: texTranslucency ?? null,
   };
+  // GLB export: write the dome-normal cards single-sided with both windings
+  // (export-glb.js singleSidedCards) — opt-in per species (foliage.singleSidedExport).
+  if (c.singleSidedExport) mat.userData.exportSingleSided = true;
   return { material: mat, centerUniform, tintNode, tintAmount };
 }
 

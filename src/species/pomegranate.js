@@ -55,6 +55,7 @@ export const pomegranate = {
   },
   foliage: {
     mode: 'leaves', atlasFruit: true, leafUV: ATLAS.spray,
+    singleSidedExport: true, // GLB export: dome-normal cards keep their outward normal on both faces (export-glb.js)
     mergeExportPiles: true, // GLB export: leaves + accents + atlas fruit write ONE leaves primitive (export-glb.js)
     clustersPerBranch: 3, clusterSize: 0.5, clusterSizeVar: 0.25, clusterQuads: 2,
     tint: 0xffffff, leavesPerBranch: 8, size: 0.32, sizeVar: 0.25, widthRatio: 0.382,

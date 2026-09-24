@@ -53,6 +53,7 @@ export const tamarisk = {
   terminalStemsAreGuides: true,
   foliage: {
     mode: 'leaves', leafUV: ATLAS.plume,
+    singleSidedExport: true, // GLB export: dome-normal cards keep their outward normal on both faces (export-glb.js)
     mergeExportPiles: true, // GLB export: leaves + accents + atlas fruit write ONE leaves primitive (export-glb.js)
     clustersPerBranch: 1, clusterSize: 0.7, clusterSizeVar: 0.25, clusterQuads: 2,
     tint: 0xffffff, leavesPerBranch: 2, size: 0.44, sizeVar: 0.35, widthRatio: 0.62, quads: 2, alphaTest: 0.4,

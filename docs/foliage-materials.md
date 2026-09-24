@@ -109,6 +109,10 @@ tamarisk are built this way:
   `export-glb.js` merges the instanced piles that share a material before
   grouping, so leaves + fruit + accents write ONE leaves primitive per LOD;
   without it every pile keeps its own primitive, as before.
+  With `foliage.singleSidedExport` (opt-in; the three leaf-atlas species) the
+  dome-bent card piles are written with BOTH windings and the same outward
+  normals, and the leaf material exports `doubleSided: false` (fruit is left
+  as is) — see "Dome normals in other engines" below.
 - **See-through crowns (tamarisk)** — a haze of thread-thin branchlets is
   built from MANY small cards on invisible guide twigs
   (`terminalStemsAreGuides`), plus three opt-in leaf-material knobs
@@ -129,3 +133,15 @@ tamarisk are built this way:
   `dilate-alpha --fill --fill-rect <plume>` → `derive-pbr` →
   `derive-translucency` with the flower rect at `--gain 0.8` (pale petals do
   transmit; zeroing them rendered the spikes dark brown).
+
+## Dome normals in other engines
+
+The canopy look depends on the exported dome-bent normals (every card shades by
+the outward canopy sphere, not its own face). Two things undo that when a GLB is
+imported elsewhere: an importer that **recomputes normals** replaces them with
+flat per-face normals (keep "import normals" on), and a **`doubleSided`** glTF
+material makes the renderer flip the normal on each card's back face, so half
+the card faces shade as if they faced into the canopy (dark interiors and
+undersides). The opt-in single-sided export (`foliage.singleSidedExport`)
+exists for the second case: both windings, one outward normal, single-sided
+material.
