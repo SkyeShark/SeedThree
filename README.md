@@ -105,12 +105,13 @@ node scripts/texture/derive-pbr.mjs assets/bark/redcedar_albedo.png   # writes _
 node scripts/texture/chroma-key.mjs        raw.png assets/leaves/redcedar_needle_albedo.png
 node scripts/texture/dilate-alpha.mjs      assets/leaves/redcedar_needle_albedo.png --passes 4
 node scripts/texture/derive-pbr.mjs        assets/leaves/redcedar_needle_albedo.png
-node scripts/texture/derive-translucency.mjs assets/leaves/redcedar_needle_albedo.png  # → *_albedo_translucency.png (rename to _translucency.png)
+node scripts/texture/derive-translucency.mjs assets/leaves/redcedar_needle_albedo.png  # writes _translucency
 ```
 
 Art-direction gotchas learned the hard way:
 - **A needle spray must be a single feather/frond branchlet** — one central woody axis with needles emanating ~45° on both sides, fully inside the frame. A *radial burst* from one point reads as a **grass tuft** on the tree, not a conifer.
 - Bark must tile with no visible seam (offset-check it); a leaf card should fill the frame with a little margin so alpha-dilation and mip-mapping don't clip it.
+- Re-run `derive-pbr` and `derive-translucency` every time the albedo changes: the maps are read from the albedo's own pixels, so maps left over from an earlier albedo won't line up with the leaf.
 
 If you use OpenAI Codex CLI: it can't always save into the workspace, so prompt it to *"generate the image only — do not save/read/list/search files"*, tag the prompt with a unique marker, then harvest the bytes with `scripts/texture/harvest-codex-image.mjs --match <marker> <out.png>`.
 

@@ -1,16 +1,17 @@
-// Derive a leaf TRANSLUCENCY (thickness) map from a leaf cutout's alpha.
+// Derive a leaf TRANSLUCENCY map from a leaf cutout (albedo with alpha).
 //
-// Physically, a leaf is thin at its edges (light passes through → glows when
-// backlit) and thicker at the midrib/interior and along veins (blocks light).
-// A blurred alpha is a cheap, perfectly co-registered proxy for "distance from
-// edge": near the cutout edge the blur mixes in transparent pixels (low), deep
-// in the interior it stays ~1. So (1 − blur(alpha)) is high at the thin edges.
+// Physically, the whole thin blade transmits light when backlit and the VEINS
+// block it. The map reads the leaf's own texture that way: tissue transmits
+// (--tissue), veins — bright ridges in the albedo, found by a band-limited
+// high-pass — go dark (--vein), and everything under the alphaTest cut is black.
+// Derived from the albedo itself, so it lines up with the leaf by construction:
+// re-derive it whenever the albedo changes.
 //
-// Output: grayscale where WHITE = transmits a lot (thin edges), BLACK = opaque
-// (interior / veins / transparent background). Used as the SSS thickness map so
-// only the leaf rim glows, not the whole card.
+// Output: grayscale where WHITE = transmits, BLACK = opaque (veins / cut-out
+// background), written as <stem>_translucency.png next to the input — a trailing
+// `_albedo` is dropped (as derive-pbr.mjs does), so it replaces the live map.
 //
-// Usage: node scripts/texture/derive-translucency.mjs <leaf.png> [--radius 22] [--body 0.28]
+// Usage: node scripts/texture/derive-translucency.mjs <leaf_albedo.png> [--tissue 0.85] [--vein 6]
 
 import sharp from 'sharp';
 
@@ -19,7 +20,7 @@ const input = args[0];
 if (!input) { console.error('usage: derive-translucency.mjs <leaf.png>'); process.exit(2); }
 const ti = args.indexOf('--tissue'); const tissue = ti >= 0 ? +args[ti + 1] : 0.85;   // transmission of leaf tissue between veins
 const vgi = args.indexOf('--vein'); const veinGain = vgi >= 0 ? +args[vgi + 1] : 6.0;  // how strongly veins are darkened (opaque)
-const out = input.replace(/\.png$/i, '_translucency.png');
+const out = `${input.replace(/(_albedo)?\.png$/i, '')}_translucency.png`;
 
 const { data, info } = await sharp(input).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
 const { width: W, height: H, channels: C } = info;
@@ -36,8 +37,11 @@ const raw1 = { raw: { width: W, height: H, channels: 1 } };
 // Physically: the whole thin blade transmits; the VEINS are opaque. Detect veins
 // as bright ridges via a band-limited high-pass (blur2 − blur12, so 1px source
 // noise can't get through) and darken them strongly. Tissue stays translucent.
-const lumMed = await sharp(Buffer.from(lum), raw1).blur(2).raw().toBuffer();
-const lumBig = await sharp(Buffer.from(lum), raw1).blur(12).raw().toBuffer();
+// sharp hands a blurred 1-channel raw image back as 3-channel sRGB: take one
+// channel back, or the per-pixel reads below stride into the wrong pixels (a
+// vertically squashed, scanlined vein field that doesn't line up with the leaf).
+const lumMed = await sharp(Buffer.from(lum), raw1).blur(2).extractChannel(0).raw().toBuffer();
+const lumBig = await sharp(Buffer.from(lum), raw1).blur(12).extractChannel(0).raw().toBuffer();
 
 const outBuf = Buffer.alloc(W * H);
 for (let i = 0; i < W * H; i++) {
