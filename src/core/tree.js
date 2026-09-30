@@ -328,6 +328,22 @@ function buildDichotomousTree(species, seed, assets, lodOpts, reuse = null) {
       removeTransientGroup(level, 'folGroup');
     }
 
+    // Fruiting shrubs share the same real GLB fruit path as orchard trees. Keep
+    // fruit on the two nearest LODs, thin it at LOD1, and rebuild it as a
+    // transient mesh so seed/species edits cannot leave stale instances behind.
+    removeTransientGroup(level, 'fruitMesh');
+    if (species.fruit && assets.fruitGeo && assets.fruitMat && i < 2 && species.foliage !== false) {
+      const frng = new Rng(`${species.name}:${seed}:fruit${i}`);
+      const fcfg = i === 0 ? species.fruit
+        : { ...species.fruit, maxCount: Math.max(1, Math.round((species.fruit.maxCount ?? 120) * 0.35)) };
+      const fruit = buildFruits(terminalStems, fcfg, frng, assets.fruitGeo, assets.fruitMat, stems);
+      if (fruit) {
+        leafInstances += fruit.count;
+        level.add(fruit);
+        level.userData.fruitMesh = fruit;
+      }
+    }
+
     if (!reuse) lod.addLevel(level, lv.distance, 0.05);
     stats.push({ name: lv.name, distance: lv.distance, leafInstances });
   }
