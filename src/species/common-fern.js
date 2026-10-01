@@ -1,0 +1,25 @@
+// Common fern (Dryopteris filix-mas) — barkless radial crown for shaded,
+// temperate woodland floors. The foliage card includes its own narrow rachis.
+export const commonFern = {
+  name: 'Common Male Fern',
+  latin: 'Dryopteris filix-mas',
+  category: 'groundcover',
+  bark: null,
+  leaf: 'fern_albedo.png',
+  biome: 'temperate',
+  plantSink: 0.008,
+  foliageType: 'fern',
+  foliage: {
+    mode: 'leaves',
+    frondCount: 11,
+    minLength: 0.58,
+    maxLength: 0.92,
+    widthRatio: 0.24,
+    bend: 0.48,
+    alphaTest: 0.42,
+    tint: 0xd7edbe,
+    transmit: [0.3, 0.5, 0.2],
+    flutterScale: 0.55,
+  },
+  params: {},
+};

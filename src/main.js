@@ -94,7 +94,7 @@ async function loadTex(url, srgb) {
 const assetCache = new Map();
 async function loadSpeciesAssets(species, sunLight = null) {
   if (assetCache.has(species.name)) return assetCache.get(species.name);
-  const base = species.bark.replace('_albedo.png', '');
+  const base = species.bark?.replace('_albedo.png', '') ?? null;
   // Strip an optional _albedo suffix so `foo_albedo.png` → derived `foo_normal.png`
   // (matches how the user names rosette maps), while `white_oak_single.png` →
   // `white_oak_single_normal.png` still works.
@@ -102,9 +102,9 @@ async function loadSpeciesAssets(species, sunLight = null) {
   // Derived leaf maps are optional per species (yucca has only the atlas).
   const opt = (url, srgb) => loadTex(url, srgb).catch(() => null);
   const [barkTexture, barkNormal, barkRoughness, leafTexture, leafTranslucency, leafNormal, leafRoughness, leafDryTexture, leafDryestTexture] = await Promise.all([
-    loadTex(barkUrl(species.bark), true),
-    opt(barkUrl(`${base}_normal.png`), false),
-    opt(barkUrl(`${base}_roughness.png`), false),
+    species.bark ? loadTex(barkUrl(species.bark), true) : Promise.resolve(null),
+    species.bark ? opt(barkUrl(`${base}_normal.png`), false) : Promise.resolve(null),
+    species.bark ? opt(barkUrl(`${base}_roughness.png`), false) : Promise.resolve(null),
     // Cactus spine cards are optional detail. If their atlas is missing the
     // spine material deliberately falls back to opaque straw-coloured cards;
     // do not fail the entire species load before that fallback can run.
@@ -637,6 +637,7 @@ async function main() {
   // FIXED exemplar seed inside bakeBranchCards, so reseeding reuses the cache.
   const cardCache = new Map();
   async function ensureBranchCards(species, shaped) {
+    if (species.foliageType === 'fern') return null;
     if (species.foliageType === 'rosette') {
       // Rosette species use real geometry at every DESKTOP LOD. In MOBILE mode the
       // far rung replaces terminal rosette arms with 4-way crossed cards (8 tris

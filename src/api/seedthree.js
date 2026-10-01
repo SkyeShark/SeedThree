@@ -60,7 +60,9 @@ export function listSpecies() {
   return Object.entries(SPECIES).map(([key, sp]) => ({
     key, name: sp.name, latin: sp.latin ?? null, biome: sp.biome ?? null,
     foliageType: sp.foliageType ?? 'leaves', cactus: !!sp.cactus,
-    generator: (sp.foliageType === 'rosette' || sp.foliageType === 'sprayClusters') ? 'dichotomous-lsystem' : 'weber-penn',
+    generator: sp.foliageType === 'fern' ? 'radial-fronds'
+      : (sp.foliageType === 'rosette' || sp.foliageType === 'sprayClusters') ? 'dichotomous-lsystem'
+        : 'weber-penn',
   }));
 }
 
@@ -75,14 +77,17 @@ function knob(entry, sp, group) {
 // with their UI ranges. Only the ones relevant to the species' type are returned.
 function globalKnobs(sp) {
   const rosette = sp.foliageType === 'rosette';
+  const fern = sp.foliageType === 'fern';
   const cactus = !!sp.cactus;
   const out = [
     { key: 'seed', name: 'Seed', group: 'global', min: 1, max: 9999, step: 1, default: 1 },
     { key: 'showLeaves', name: 'Show leaves', group: 'global', type: 'bool', default: true },
+  ];
+  if (!fern) out.push(
     { key: 'tileWorldSize', name: 'Bark tiling (m)', group: 'global', min: 0.6, max: 3.0, step: 0.05, default: sp.tileWorldSize ?? 1.5 },
     { key: 'barkTint', name: 'Bark tint', group: 'material', type: 'color', default: 0xffffff },
     { key: 'barkFlat', name: 'Bark flat shading', group: 'material', type: 'bool', default: false },
-  ];
+  );
   if (!rosette) out.push(
     { key: 'leafColorize', name: 'Leaf tint', group: 'material', type: 'color', default: 0xffffff },
     { key: 'leafTintAmount', name: 'Leaf tint amount', group: 'material', min: 0, max: 1, step: 0.01, default: 0 },
@@ -140,10 +145,12 @@ export const LOD_OPTIONS = [
 export function getSchema(speciesKey) {
   const sp = speciesOrThrow(speciesKey);
   const rosette = sp.foliageType === 'rosette';
+  const fern = sp.foliageType === 'fern';
+  const direct = rosette || fern;
   const shape = (sp.controls ?? []).map((e) => knob(e, sp, 'shape'));
 
   let advanced;
-  if (rosette) {
+  if (direct) {
     advanced = (sp.advancedControls ?? []).map((e) => knob(e, sp, 'advanced'));
   } else {
     // Temperate: per-level dials written into controls.paramOverrides[key][level].
@@ -170,9 +177,9 @@ export function getSchema(speciesKey) {
   return {
     species: speciesKey, name: sp.name, latin: sp.latin ?? null, biome: sp.biome ?? null,
     foliageType: sp.foliageType ?? 'leaves', cactus: !!sp.cactus,
-    generator: rosette ? 'dichotomous-lsystem' : 'weber-penn',
+    generator: fern ? 'radial-fronds' : rosette ? 'dichotomous-lsystem' : 'weber-penn',
     shape, advanced, global: globalKnobs(sp),
-    lod: LOD_OPTIONS.filter((o) => !o.temperateOnly || !rosette),
+    lod: LOD_OPTIONS.filter((o) => !o.temperateOnly || !direct),
   };
 }
 
@@ -309,6 +316,9 @@ export function statsOf(group) {
 export function skeleton({ species, seed = 1, controls = {} } = {}) {
   const sp = speciesOrThrow(species);
   const shaped = applySpeciesControls(sp, mergeControls(species, controls, seed));
+  if (sp.foliageType === 'fern') {
+    return { generator: 'radial-fronds', stems: 0, terminals: shaped.foliage?.frondCount ?? 0 };
+  }
   if (sp.foliageType === 'rosette') {
     const skParams = { ...shaped.params, tipClearance: (shaped.foliage?.leafLen ?? 0.5) * 0.9 };
     const { stems, terminalStems } = generateDichotomous(skParams, new Rng(`${sp.name}:${seed}`));
@@ -465,7 +475,9 @@ async function loadMaps(loadTexture, dir, sub, file, extraLinear = []) {
 export async function buildAssets({ species, loadTexture, assetsDir = 'assets', sunLight = null } = {}) {
   const sp = speciesOrThrow(species);
   if (typeof loadTexture !== 'function') throw new Error('[seedthree] buildAssets needs a loadTexture(path,{srgb}) function');
-  const bark = await loadMaps(loadTexture, assetsDir, 'bark', sp.bark);
+  const bark = sp.bark
+    ? await loadMaps(loadTexture, assetsDir, 'bark', sp.bark)
+    : { base: null, albedo: null, normal: null, roughness: null };
   const leaf = await loadMaps(loadTexture, assetsDir, 'leaves', sp.leaf, ['translucency']);
   const leafBase = sp.leaf.replace(/(_albedo)?\.png$/, '');
   const leafDry = await loadTexture(`${assetsDir}/leaves/${leafBase}_dry_albedo.png`, { srgb: true }).catch(() => null);
