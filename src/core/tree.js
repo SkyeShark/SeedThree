@@ -7,7 +7,7 @@ import { Group, LOD, Mesh, MeshStandardNodeMaterial } from 'three/webgpu';
 import { Rng } from './rng.js';
 import { generateSkeleton } from './weber-penn.js';
 import { buildBranchGeometry, estimateBranchTriangles } from './branch-mesh.js';
-import { buildFoliage } from './leaf-cards.js';
+import { buildFoliage, keepSpraySubset } from './leaf-cards.js';
 import { buildCardFoliage, stableStemSubset } from './branch-cards.js';
 import { buildYuccaFoliage } from './yucca-leaves.js';
 import { generateDichotomous, buildMergedMesh, stemFoliageView } from './dichotomous.js';
@@ -102,8 +102,13 @@ function buildDichotomousTree(species, seed, assets, lodOpts, reuse = null) {
     // LOD0 — the "lower LOD is heavier than the main one" report.)
     ? [
       { name: 'LOD0', distance: 0, radialSegs: rs(nativeSides), rosetteDensity: 1, ...ring(0, 0) },
-      { name: 'LOD1', distance: lodOpts.lod1Dist ?? 35, radialSegs: Math.min(rs(5), nativeSides), rosetteDensity: 0.6 * d1, ...ring(0.5, 18) },
-      { name: 'LOD2', distance: lodOpts.lod2Dist ?? 80, radialSegs: Math.min(rs(4), nativeSides), rosetteDensity: 0.35 * d2, ...ring(0.9, 26) },
+      // Budget goes where the silhouette is: sprays draw a shrub's outline and cost
+      // little (a few hundred tris); the tubes are 80–90% of every rung. So the rungs
+      // keep LOD0's own sprays (nested, shell-first — see keepSpraySubset) and take
+      // their savings from girth: at the switch distances a stem is a few pixels
+      // wide, where 4 sides, then 3, read as round.
+      { name: 'LOD1', distance: lodOpts.lod1Dist ?? 35, radialSegs: Math.min(rs(4), nativeSides), rosetteDensity: d1, ...ring(0.5, 18) },
+      { name: 'LOD2', distance: lodOpts.lod2Dist ?? 80, radialSegs: Math.min(3, nativeSides), rosetteDensity: 0.9 * d2, ...ring(0.9, 26) },
     ]
     : [
       { name: 'LOD0', distance: 0, radialSegs: rs(nativeSides), rosetteDensity: 1, coneRadialSegs: cs(12), ...ring(0, 0) },
@@ -301,15 +306,22 @@ function buildDichotomousTree(species, seed, assets, lodOpts, reuse = null) {
       // Rebuilt per level (a few dozen instances; material is cached).
       removeTransientGroup(level, 'cardGroup');
       removeTransientGroup(level, 'folGroup');
-      const frng = new Rng(`${species.name}:${seed}:sprays${i}`);
+      // Every rung grows LOD0's own spray set (LOD0's seed, LOD0's count) and keeps a
+      // nested, shell-first subset of it (keepSpraySubset): a rung switch never moves
+      // a spray, it only thins the interior, so the silhouette holds while the
+      // instance count — the budget — drops. (Re-rolling fewer sprays per rung moved
+      // every spray at each switch: the silhouette jumped even when coverage matched.)
+      const frng = new Rng(`${species.name}:${seed}:sprays0`);
       const sprayDensity = lv.rosetteDensity ?? 1;
-      const cfg = { ...species.foliage, mode: 'clusters',
-        clustersPerBranch: Math.max(1, Math.round((species.foliage.clustersPerBranch ?? 2) * sprayDensity)) };
+      const fullCount = species.foliage.clustersPerBranch ?? 2;
+      const sprayKeep = Math.max(1, Math.round(fullCount * sprayDensity)) / fullCount;   // the rung's budget, as before
+      const cfg = { ...species.foliage, mode: 'clusters', clustersPerBranch: fullCount };
       // Anchor sprays on the SAME decimated stem view the tube mesher renders
       // at this level: reduced LODs pull rings onto the gnarl's mean curve, and
       // cards anchored to the raw skeleton hover beside the smoothed twigs.
       const anchorView = (s) => stemFoliageView(s, meshParams);
       const fol = buildFoliage(terminalStems.map(anchorView), cfg, frng, assets.clusterMat, assets.clusterCenter);
+      if (fol && sprayKeep < 1) keepSpraySubset(fol, sprayKeep);
       // parentSprays (0..1): sub-terminal parents also carry sprays — the
       // mid-canopy fill of the eidoverse shrub look. Fraction scales the
       // per-branch count; the terminals' call above owns the dome centre.
@@ -320,7 +332,8 @@ function buildDichotomousTree(species, seed, assets, lodOpts, reuse = null) {
         if (parents.length) {
           parentFol = buildFoliage(parents.map(anchorView),
             { ...cfg, clustersPerBranch: Math.max(1, Math.round(cfg.clustersPerBranch * pFrac)) },
-            new Rng(`${species.name}:${seed}:psprays${i}`), assets.clusterMat, null);
+            new Rng(`${species.name}:${seed}:psprays0`), assets.clusterMat, null);
+          if (parentFol && sprayKeep < 1) keepSpraySubset(parentFol, sprayKeep);
         }
       }
       if (fol || parentFol) {

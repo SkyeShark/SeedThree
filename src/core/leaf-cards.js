@@ -417,5 +417,44 @@ export function buildFoliage(terminalStems, cfg, rng, material, centerUniform) {
   return mesh;
 }
 
+/**
+ * Keep a nested, silhouette-first subset of a foliage InstancedMesh, in place.
+ * Reduced LOD rungs build the FULL LOD0 spray set (same seed, same placement)
+ * and keep only part of it, so a rung switch never moves a spray — it only
+ * removes some — and the instance count (the triangle budget) drops to `keep`.
+ * Ranking: the canopy's outer shell first (those sprays draw the silhouette),
+ * blended with a low-discrepancy identity score so the interior thins evenly
+ * instead of emptying. A lower keep fraction is a strict subset of a higher one.
+ * @param {InstancedMesh} mesh  buildFoliage result
+ * @param {number} keep         0..1 fraction of instances kept
+ * @param {number} [shell=0.7]  0 = even thinning, 1 = strict outside-in
+ */
+export function keepSpraySubset(mesh, keep, shell = 0.7) {
+  const n = mesh.count;
+  const keepN = Math.max(1, Math.min(n, Math.round(n * Math.max(0, Math.min(1, keep)))));
+  if (keepN >= n) return mesh;
+  const geo = mesh.geometry, mat = mesh.instanceMatrix.array;
+  const c = new Vector3(), p = new Vector3();
+  for (let i = 0; i < n; i++) c.add(p.set(mat[i * 16 + 12], mat[i * 16 + 13], mat[i * 16 + 14]));
+  c.divideScalar(n);
+  const r = new Float32Array(n);
+  let rMax = 1e-6;
+  for (let i = 0; i < n; i++) { r[i] = p.set(mat[i * 16 + 12], mat[i * 16 + 13], mat[i * 16 + 14]).distanceTo(c); rMax = Math.max(rMax, r[i]); }
+  const golden = 0.6180339887498949;
+  const order = [...Array(n).keys()].map((i) => ({ i, score: shell * (1 - r[i] / rMax) + (1 - shell) * (((i + 1) * golden) % 1) }))
+    .sort((a, b) => a.score - b.score || a.i - b.i).slice(0, keepN).map((e) => e.i).sort((a, b) => a - b);
+  const compact = (arr, size) => { for (let k = 0; k < order.length; k++) arr.copyWithin(k * size, order[k] * size, order[k] * size + size); };
+  compact(mat, 16);
+  for (const name of Object.keys(geo.attributes)) {
+    const a = geo.attributes[name];
+    if (a.isInstancedBufferAttribute) { compact(a.array, a.itemSize); a.needsUpdate = true; }
+  }
+  if (geo.userData.windWeights) compact(geo.userData.windWeights, 1);
+  mesh.count = keepN;
+  mesh.instanceMatrix.needsUpdate = true;
+  mesh.computeBoundingSphere();
+  return mesh;
+}
+
 // (Cluster placement now shares buildFoliage's leaf grammar — the old
 // free-floating rosette builder is gone.)
