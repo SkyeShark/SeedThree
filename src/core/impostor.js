@@ -203,9 +203,9 @@ function bentNormalCardGeometry(w, h) {
   return geo;
 }
 
-const TRANSMIT = [0.42, 0.62, 0.24]; // same transmitted green as the live foliage
+const TRANSMIT = [0.42, 0.62, 0.24]; // broadleaf default — species may override
 
-function makeCardMaterial(t, cardH) {
+function makeCardMaterial(t, cardH, transmit = TRANSMIT) {
   // Live volume shading = the analytic canopy-dome normalNode below. It must be a
   // normalNode (not the mesh vertex normals): DoubleSide materials FLIP vertex
   // normals on back faces, so whichever crossed card you viewed from behind had
@@ -226,7 +226,10 @@ function makeCardMaterial(t, cardH) {
     map: t.albedo, roughnessMap: t.rough,
     alphaTest: 0.35, side: DoubleSide, roughness: 1.0, metalness: 0.0,
   });
-  mat.thicknessColorNode = texture(t.trans).r.mul(0.7).mul(uniform(new Color().setRGB(...TRANSMIT)));
+  // The species' OWN transmit color — the flat ambient scatter re-tints the
+  // whole canopy, so the hardcoded broadleaf green turned grey desert shrubs
+  // green at the billboard switch (the blackbrush report).
+  mat.thicknessColorNode = texture(t.trans).r.mul(0.7).mul(uniform(new Color().setRGB(...transmit)));
   mat.thicknessDistortionNode = uniform(0.0);
   mat.thicknessAmbientNode = uniform(0.16); // scatter floor — matches leaf/card LODs
   mat.thicknessAttenuationNode = uniform(1.0);
@@ -372,7 +375,7 @@ export async function bakeImpostor(renderer, sourceGroup, opts = {}) {
   group.userData.isBillboard = true;
   const cardGeo = bentNormalCardGeometry(halfW * 2, halfH * 2);
   for (const [i, t] of [viewTextures.front, viewTextures.side].entries()) {
-    const card = new Mesh(cardGeo, makeCardMaterial(t, halfH * 2));
+    const card = new Mesh(cardGeo, makeCardMaterial(t, halfH * 2, opts.transmit));
     card.name = i === 0 ? 'billboard_front' : 'billboard_side';
     card.position.copy(center);
     if (i === 1) card.rotation.y = -Math.PI / 2;
@@ -407,7 +410,7 @@ export function assembleBillboardFromRawBake(res, opts = {}) {
   group.userData.isBillboard = true;
   const cardGeo = bentNormalCardGeometry(halfW * 2, halfH * 2);
   for (const [i, t] of [viewTex.front, viewTex.side].entries()) {
-    const card = new Mesh(cardGeo, makeCardMaterial(t, halfH * 2));
+    const card = new Mesh(cardGeo, makeCardMaterial(t, halfH * 2, opts.transmit));
     card.name = i === 0 ? 'billboard_front' : 'billboard_side';
     card.position.copy(c);
     if (i === 1) card.rotation.y = -Math.PI / 2;

@@ -917,7 +917,12 @@ async function main() {
       // is the near CARD rung — baking cards-of-cards gave the billboard giant
       // flat leaves. The desktop-max mesh always exists (hiddenInApp, still built).
       const source = (geomLevels.find((l) => l.object.userData.lodName === 'LOD0') ?? geomLevels[0]).object;
-      const opts = { name: SPECIES[state.speciesKey].name, lodName: `LOD${geomLevels.length}` };
+      const opts = {
+        name: SPECIES[state.speciesKey].name, lodName: `LOD${geomLevels.length}`,
+        // The billboard card's ambient scatter must use the SPECIES transmit —
+        // the broadleaf-green default re-tinted grey desert shrubs at range.
+        transmit: SPECIES[state.speciesKey].foliage?.transmit,
+      };
       if (bakeWorker) {
         // OFF-THREAD: serialize the source geometry + textures, bake full-res on the
         // worker's OWN GPU queue (viewer never stalls), assemble the cards here from

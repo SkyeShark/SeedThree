@@ -345,6 +345,63 @@ export function generateDichotomous(userParams, rng) {
   return { stems, terminalStems, geometry };
 }
 
+// RING DECIMATION (reduced/mobile LODs): the skeleton's ring cadence is
+// GENERATOR-fixed — dense enough for the hero — and radialSegs only thins a
+// stem around its GIRTH. This is the lever that thins it along its LENGTH:
+// drop rings that add little shape, always keeping the base + tip (fork/weld
+// rings), and keeping a ring once, since the last kept one, the accumulated
+// BEND exceeds ringKeepAngle, the RADIUS drifts >12% (base flares/necks stay
+// shaped), or the GAP exceeds ringMaxSpacing. The kept interior rings are
+// ANTI-ALIASED onto the MEAN curve: gnarl wiggle is shorter than the decimated
+// spacing, so raw samples land on wiggle EXTREMES and read as chord-kinked
+// elbows; each ring becomes the centroid of the skeleton points it replaced
+// (base + tip stay exact — fork/weld/cap positions are load-bearing).
+//
+// EXPORTED because the mesh is only half the story: anything ANCHORED to the
+// stem (spray cards, fruit) must anchor to this same decimated view, or the
+// cards visibly hover beside the smoothed tube on reduced LODs.
+const _da = new Vector3(), _db = new Vector3();
+export function decimatedStemView(stem, p) {
+  if ((p.ringMaxSpacing ?? 0) <= 0 || stem.points.length <= 2) return stem;
+  const keepAng = ((p.ringKeepAngle ?? 15) * Math.PI) / 180;
+  const pts = stem.points;
+  const keep = [0];
+  let gap = 0, bend = 0, rKept = stem.radii[0];
+  for (let i = 1; i < pts.length - 1; i++) {
+    gap += pts[i].distanceTo(pts[i - 1]);
+    _da.subVectors(pts[i], pts[i - 1]).normalize();
+    _db.subVectors(pts[i + 1], pts[i]).normalize();
+    bend += _da.angleTo(_db);
+    const rDrift = Math.abs(stem.radii[i] - rKept) / Math.max(rKept, 1e-4);
+    if (bend >= keepAng || gap >= p.ringMaxSpacing || rDrift >= 0.12) {
+      keep.push(i); gap = 0; bend = 0; rKept = stem.radii[i];
+    }
+  }
+  keep.push(pts.length - 1);
+  const n = keep.length;
+  const points = new Array(n), radii = new Array(n), winds = new Array(n);
+  for (let k = 0; k < n; k++) {
+    const i = keep[k];
+    if (k === 0 || k === n - 1) { points[k] = pts[i]; radii[k] = stem.radii[i]; winds[k] = stem.winds[i]; continue; }
+    const lo = Math.ceil((keep[k - 1] + i) / 2), hi = Math.floor((i + keep[k + 1]) / 2);
+    const c = new Vector3();
+    let r = 0, w = 0, m = 0;
+    for (let j = lo; j <= hi; j++) { c.add(pts[j]); r += stem.radii[j]; w += stem.winds[j]; m++; }
+    points[k] = c.divideScalar(m); radii[k] = r / m; winds[k] = w / m;
+  }
+  return { points, radii, winds };
+}
+
+// Foliage-anchor twin of the mesh's decimated view: same points/radii/winds
+// plus fresh orientation frames (local +Y = tangent), carrying the stem's
+// identity fields the card/foliage builders read.
+export function stemFoliageView(stem, p) {
+  const sv = decimatedStemView(stem, p);
+  if (sv === stem) return stem;
+  const { orients } = framesFor(sv.points);
+  return { ...stem, points: sv.points, radii: sv.radii, winds: sv.winds, orients };
+}
+
 // ---- merged tube mesh ------------------------------------------------------
 // One connected surface. Each stem is a tube of rings; a stem's LAST ring is
 // stitched to EACH child stem's FIRST ring, so the parent feeds both children
@@ -444,43 +501,7 @@ export function buildMergedMesh(stems, params, targetGeo = null) {
   // shaped), or the GAP exceeds ringMaxSpacing. Off (hero) when ringMaxSpacing
   // is unset/0 — the stem is used as-is, no copies made.
   const decimate = (p.ringMaxSpacing ?? 0) > 0;
-  const _da = new Vector3(), _db = new Vector3();
-  const ringsOf = (stem) => {
-    if (!decimate || stem.points.length <= 2) return stem;
-    const keepAng = ((p.ringKeepAngle ?? 15) * Math.PI) / 180;
-    const pts = stem.points;
-    const keep = [0];
-    let gap = 0, bend = 0, rKept = stem.radii[0];
-    for (let i = 1; i < pts.length - 1; i++) {
-      gap += pts[i].distanceTo(pts[i - 1]);
-      _da.subVectors(pts[i], pts[i - 1]).normalize();
-      _db.subVectors(pts[i + 1], pts[i]).normalize();
-      bend += _da.angleTo(_db);
-      const rDrift = Math.abs(stem.radii[i] - rKept) / Math.max(rKept, 1e-4);
-      if (bend >= keepAng || gap >= p.ringMaxSpacing || rDrift >= 0.12) {
-        keep.push(i); gap = 0; bend = 0; rKept = stem.radii[i];
-      }
-    }
-    keep.push(pts.length - 1);
-    // ANTI-ALIAS the kept rings onto the MEAN curve: the generator's gnarl
-    // wiggle is shorter than the decimated ring spacing, so sampling raw points
-    // lands rings on wiggle EXTREMES and the smooth wave reads as a jagged
-    // chord-kinked elbow. Each interior kept ring becomes the centroid of the
-    // skeleton points it replaced (window = halfway to its kept neighbours);
-    // base + tip stay exact (fork/weld/cap positions are load-bearing).
-    const n = keep.length;
-    const points = new Array(n), radii = new Array(n), winds = new Array(n);
-    for (let k = 0; k < n; k++) {
-      const i = keep[k];
-      if (k === 0 || k === n - 1) { points[k] = pts[i]; radii[k] = stem.radii[i]; winds[k] = stem.winds[i]; continue; }
-      const lo = Math.ceil((keep[k - 1] + i) / 2), hi = Math.floor((i + keep[k + 1]) / 2);
-      const c = new Vector3();
-      let r = 0, w = 0, m = 0;
-      for (let j = lo; j <= hi; j++) { c.add(pts[j]); r += stem.radii[j]; w += stem.winds[j]; m++; }
-      points[k] = c.divideScalar(m); radii[k] = r / m; winds[k] = w / m;
-    }
-    return { points, radii, winds };
-  };
+  const ringsOf = (stem) => (decimate ? decimatedStemView(stem, p) : stem);
 
   // Emit a stem's rings; return the base index of its FIRST and LAST ring so a
   // parent can stitch into the child's first, and children stitch into ours.

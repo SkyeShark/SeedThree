@@ -10,7 +10,7 @@ import { buildBranchGeometry, estimateBranchTriangles } from './branch-mesh.js';
 import { buildFoliage } from './leaf-cards.js';
 import { buildCardFoliage, stableStemSubset } from './branch-cards.js';
 import { buildYuccaFoliage } from './yucca-leaves.js';
-import { generateDichotomous, buildMergedMesh } from './dichotomous.js';
+import { generateDichotomous, buildMergedMesh, stemFoliageView } from './dichotomous.js';
 import { buildCactusSpines } from './cactus-spines.js';
 import { buildFruits } from './fruit.js';
 
@@ -92,11 +92,24 @@ function buildDichotomousTree(species, seed, assets, lodOpts, reuse = null) {
   // so the tuned budgets hold; lowQ runs 0 at the default → 1 at the floor).
   const lowQ = Math.max(0, (MESHQ_DEFAULT - q) / (MESHQ_DEFAULT - 0.3));
   const ring = (spacing, angle) => ({ ringMaxSpacing: spacing + 0.6 * lowQ, ringKeepAngle: angle + 15 * lowQ });
-  const levels = [
-    { name: 'LOD0', distance: 0, radialSegs: rs(species.params.radialSegs ?? 10), rosetteDensity: 1, coneRadialSegs: cs(12), ...ring(0, 0) },
-    { name: 'LOD1', distance: lodOpts.lod1Dist ?? 35, radialSegs: rs(6), rosetteDensity: 0.6 * d1, coneRadialSegs: cs(8), ...ring(0.35, 12) },
-    { name: 'LOD2', distance: lodOpts.lod2Dist ?? 80, radialSegs: rs(6), rosetteDensity: 0.35 * d2, coneRadialSegs: cs(4), ...ring(0.6, 18) },
-  ];
+  const shrub = species.foliageType === 'sprayClusters';
+  const nativeSides = species.params.radialSegs ?? 10;
+  const levels = shrub
+    // SHRUB LADDER: tubes dominate a shrub's triangles (sprays are a few hundred
+    // tris), so the reduction levers are SIDES + ring decimation — and every
+    // reduced rung must stay at or below LOD0's native sides. (The rosette
+    // ladder's rungs assumed Joshua-fat tubes and could exceed a thin shrub's
+    // LOD0 — the "lower LOD is heavier than the main one" report.)
+    ? [
+      { name: 'LOD0', distance: 0, radialSegs: rs(nativeSides), rosetteDensity: 1, ...ring(0, 0) },
+      { name: 'LOD1', distance: lodOpts.lod1Dist ?? 35, radialSegs: Math.min(rs(5), nativeSides), rosetteDensity: 0.6 * d1, ...ring(0.5, 18) },
+      { name: 'LOD2', distance: lodOpts.lod2Dist ?? 80, radialSegs: Math.min(rs(4), nativeSides), rosetteDensity: 0.35 * d2, ...ring(0.9, 26) },
+    ]
+    : [
+      { name: 'LOD0', distance: 0, radialSegs: rs(nativeSides), rosetteDensity: 1, coneRadialSegs: cs(12), ...ring(0, 0) },
+      { name: 'LOD1', distance: lodOpts.lod1Dist ?? 35, radialSegs: rs(6), rosetteDensity: 0.6 * d1, coneRadialSegs: cs(8), ...ring(0.35, 12) },
+      { name: 'LOD2', distance: lodOpts.lod2Dist ?? 80, radialSegs: rs(6), rosetteDensity: 0.35 * d2, coneRadialSegs: cs(4), ...ring(0.6, 18) },
+    ];
   if (species.cactus) {
     // A fluted column needs ≥2 radial samples PER RIB or the ribs alias into lumps
     // that read as broken/missing arms with garbage UVs. Keep the ribs resolved at
@@ -118,7 +131,16 @@ function buildDichotomousTree(species, seed, assets, lodOpts, reuse = null) {
   if (lodOpts.mobileTarget) {
     levels[0].hiddenInApp = true;
     levels[1].hiddenInApp = true;
-    if (species.cactus) {
+    if (shrub) {
+      // SHRUB MOBILE LADDER: same levers as the desktop shrub rungs, pushed
+      // harder — and NEVER above the native sides (the rosette ladder's fixed
+      // nearSides=8 exceeded a 6-sided shrub LOD0: heavier "reduced" rungs).
+      levels[2].radialSegs = Math.min(rs(5), nativeSides);
+      levels[2].rosetteDensity = 0.6 * d0;
+      Object.assign(levels[2], ring(0.5, 18));
+      levels.push({ name: 'LOD3', distance: lodOpts.lod1Dist ?? 35, appOnly: true, radialSegs: Math.min(rs(4), nativeSides), rosetteDensity: 0.35 * d1, ...ring(0.9, 26) });
+      levels.push({ name: 'LOD4', distance: lodOpts.lod2Dist ?? 70, appOnly: true, radialSegs: 4, rosetteDensity: 0.2 * d2, ...ring(1.3, 34) });
+    } else if (species.cactus) {
       // CACTUS MOBILE LADDER. The near rung keeps resolved ribs + thinned spines;
       // LOD3/LOD4 are REAL far rungs (the toggle previously added nothing here —
       // the LOD1/LOD2 sliders had no targets and the near LOD ran alone to the
@@ -283,7 +305,11 @@ function buildDichotomousTree(species, seed, assets, lodOpts, reuse = null) {
       const sprayDensity = lv.rosetteDensity ?? 1;
       const cfg = { ...species.foliage, mode: 'clusters',
         clustersPerBranch: Math.max(1, Math.round((species.foliage.clustersPerBranch ?? 2) * sprayDensity)) };
-      const fol = buildFoliage(terminalStems, cfg, frng, assets.clusterMat, assets.clusterCenter);
+      // Anchor sprays on the SAME decimated stem view the tube mesher renders
+      // at this level: reduced LODs pull rings onto the gnarl's mean curve, and
+      // cards anchored to the raw skeleton hover beside the smoothed twigs.
+      const anchorView = (s) => stemFoliageView(s, meshParams);
+      const fol = buildFoliage(terminalStems.map(anchorView), cfg, frng, assets.clusterMat, assets.clusterCenter);
       // parentSprays (0..1): sub-terminal parents also carry sprays — the
       // mid-canopy fill of the eidoverse shrub look. Fraction scales the
       // per-branch count; the terminals' call above owns the dome centre.
@@ -292,7 +318,7 @@ function buildDichotomousTree(species, seed, assets, lodOpts, reuse = null) {
       if (pFrac > 0) {
         const parents = stems.filter((s) => !s.terminal && s.children.some((ch) => ch.terminal));
         if (parents.length) {
-          parentFol = buildFoliage(parents,
+          parentFol = buildFoliage(parents.map(anchorView),
             { ...cfg, clustersPerBranch: Math.max(1, Math.round(cfg.clustersPerBranch * pFrac)) },
             new Rng(`${species.name}:${seed}:psprays${i}`), assets.clusterMat, null);
         }
