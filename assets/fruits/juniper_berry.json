@@ -1,0 +1,16 @@
+{
+  "asset": "juniper_berry",
+  "source": "authored procedural Blender source; decimated retopology; Cycles bake",
+  "triangles": 479,
+  "dimensionsMeters": [
+    0.008018242195248604,
+    0.007911153137683868,
+    0.014026004821062088
+  ],
+  "maps": [
+    "base_color",
+    "normal",
+    "roughness"
+  ],
+  "mapSize": 512
+}

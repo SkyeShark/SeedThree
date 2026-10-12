@@ -1,0 +1,725 @@
+{
+  "base": "cf2eaad39d9b7355ed086aca2a95fb785e539242",
+  "wind": 0,
+  "postProcessing": false,
+  "results": [
+    {
+      "key": "commonJuniper",
+      "sweep": [
+        {
+          "seed": 1,
+          "fruitCounts": [
+            24,
+            5,
+            0
+          ],
+          "triangles": [
+            18128,
+            6043,
+            2804
+          ]
+        },
+        {
+          "seed": 2,
+          "fruitCounts": [
+            32,
+            12,
+            0
+          ],
+          "triangles": [
+            22008,
+            9412,
+            2804
+          ]
+        },
+        {
+          "seed": 3,
+          "fruitCounts": [
+            30,
+            17,
+            0
+          ],
+          "triangles": [
+            22296,
+            12605,
+            3414
+          ]
+        },
+        {
+          "seed": 4,
+          "fruitCounts": [
+            28,
+            12,
+            0
+          ],
+          "triangles": [
+            20122,
+            9466,
+            2852
+          ]
+        },
+        {
+          "seed": 5,
+          "fruitCounts": [
+            34,
+            11,
+            0
+          ],
+          "triangles": [
+            23758,
+            9453,
+            3218
+          ]
+        },
+        {
+          "seed": 6,
+          "fruitCounts": [
+            27,
+            9,
+            0
+          ],
+          "triangles": [
+            20371,
+            8381,
+            3124
+          ]
+        },
+        {
+          "seed": 7,
+          "fruitCounts": [
+            37,
+            5,
+            0
+          ],
+          "triangles": [
+            25067,
+            6483,
+            3138
+          ]
+        },
+        {
+          "seed": 8,
+          "fruitCounts": [
+            26,
+            14,
+            0
+          ],
+          "triangles": [
+            18780,
+            10168,
+            2654
+          ]
+        },
+        {
+          "seed": 9,
+          "fruitCounts": [
+            20,
+            6,
+            0
+          ],
+          "triangles": [
+            15652,
+            6170,
+            2526
+          ]
+        },
+        {
+          "seed": 10,
+          "fruitCounts": [
+            25,
+            4,
+            0
+          ],
+          "triangles": [
+            19821,
+            6258,
+            3346
+          ]
+        }
+      ],
+      "material": {
+        "map": true,
+        "normalMap": true,
+        "roughnessMap": true
+      },
+      "side": {
+        "triangles": 18129,
+        "draws": 5,
+        "bounds": [
+          1.9403409657534212,
+          1.0832115169614553,
+          1.8338265717029572
+        ]
+      },
+      "top": {
+        "triangles": 18129,
+        "draws": 5,
+        "bounds": [
+          1.9403409657534212,
+          1.0832115169614553,
+          1.8338265717029572
+        ]
+      },
+      "visibility": [
+        {
+          "seed": 1,
+          "sidePixels": 13,
+          "sideUnoccludedPixels": 13,
+          "topPixels": 1,
+          "topUnoccludedPixels": 21
+        },
+        {
+          "seed": 2,
+          "sidePixels": 14,
+          "sideUnoccludedPixels": 15,
+          "topPixels": 3,
+          "topUnoccludedPixels": 24
+        },
+        {
+          "seed": 3,
+          "sidePixels": 15,
+          "sideUnoccludedPixels": 17,
+          "topPixels": 0,
+          "topUnoccludedPixels": 24
+        },
+        {
+          "seed": 4,
+          "sidePixels": 14,
+          "sideUnoccludedPixels": 17,
+          "topPixels": 0,
+          "topUnoccludedPixels": 21
+        },
+        {
+          "seed": 5,
+          "sidePixels": 16,
+          "sideUnoccludedPixels": 16,
+          "topPixels": 0,
+          "topUnoccludedPixels": 23
+        },
+        {
+          "seed": 6,
+          "sidePixels": 15,
+          "sideUnoccludedPixels": 15,
+          "topPixels": 0,
+          "topUnoccludedPixels": 38
+        },
+        {
+          "seed": 7,
+          "sidePixels": 0,
+          "sideUnoccludedPixels": 17,
+          "topPixels": 0,
+          "topUnoccludedPixels": 22
+        },
+        {
+          "seed": 8,
+          "sidePixels": 16,
+          "sideUnoccludedPixels": 16,
+          "topPixels": 0,
+          "topUnoccludedPixels": 25
+        },
+        {
+          "seed": 9,
+          "sidePixels": 31,
+          "sideUnoccludedPixels": 31,
+          "topPixels": 5,
+          "topUnoccludedPixels": 20
+        },
+        {
+          "seed": 10,
+          "sidePixels": 0,
+          "sideUnoccludedPixels": 13,
+          "topPixels": 13,
+          "topUnoccludedPixels": 29
+        }
+      ],
+      "fruit": {
+        "triangles": 480,
+        "draws": 2,
+        "bounds": [
+          0.008018242195248604,
+          0.014026004821062088,
+          0.007911153137683868
+        ]
+      }
+    },
+    {
+      "key": "bilberry",
+      "sweep": [
+        {
+          "seed": 1,
+          "fruitCounts": [
+            24,
+            11,
+            0
+          ],
+          "triangles": [
+            15876,
+            8066,
+            2140
+          ]
+        },
+        {
+          "seed": 2,
+          "fruitCounts": [
+            28,
+            11,
+            0
+          ],
+          "triangles": [
+            17948,
+            8222,
+            2260
+          ]
+        },
+        {
+          "seed": 3,
+          "fruitCounts": [
+            32,
+            10,
+            0
+          ],
+          "triangles": [
+            20336,
+            8042,
+            2486
+          ]
+        },
+        {
+          "seed": 4,
+          "fruitCounts": [
+            17,
+            7,
+            0
+          ],
+          "triangles": [
+            13032,
+            6558,
+            2464
+          ]
+        },
+        {
+          "seed": 5,
+          "fruitCounts": [
+            10,
+            4,
+            0
+          ],
+          "triangles": [
+            8682,
+            4344,
+            1860
+          ]
+        },
+        {
+          "seed": 6,
+          "fruitCounts": [
+            30,
+            7,
+            0
+          ],
+          "triangles": [
+            18928,
+            6270,
+            2242
+          ]
+        },
+        {
+          "seed": 7,
+          "fruitCounts": [
+            22,
+            7,
+            0
+          ],
+          "triangles": [
+            15110,
+            6336,
+            2280
+          ]
+        },
+        {
+          "seed": 8,
+          "fruitCounts": [
+            20,
+            10,
+            0
+          ],
+          "triangles": [
+            14488,
+            7954,
+            2424
+          ]
+        },
+        {
+          "seed": 9,
+          "fruitCounts": [
+            16,
+            9,
+            0
+          ],
+          "triangles": [
+            11306,
+            6536,
+            1706
+          ]
+        },
+        {
+          "seed": 10,
+          "fruitCounts": [
+            24,
+            7,
+            0
+          ],
+          "triangles": [
+            15748,
+            6058,
+            2078
+          ]
+        }
+      ],
+      "material": {
+        "map": true,
+        "normalMap": true,
+        "roughnessMap": true
+      },
+      "side": {
+        "triangles": 15877,
+        "draws": 5,
+        "bounds": [
+          0.7211847305297852,
+          0.4856878719292581,
+          0.8700529336929321
+        ]
+      },
+      "top": {
+        "triangles": 15877,
+        "draws": 5,
+        "bounds": [
+          0.7211847305297852,
+          0.4856878719292581,
+          0.8700529336929321
+        ]
+      },
+      "visibility": [
+        {
+          "seed": 1,
+          "sidePixels": 23,
+          "sideUnoccludedPixels": 26,
+          "topPixels": 24,
+          "topUnoccludedPixels": 24
+        },
+        {
+          "seed": 2,
+          "sidePixels": 21,
+          "sideUnoccludedPixels": 37,
+          "topPixels": 17,
+          "topUnoccludedPixels": 46
+        },
+        {
+          "seed": 3,
+          "sidePixels": 25,
+          "sideUnoccludedPixels": 36,
+          "topPixels": 7,
+          "topUnoccludedPixels": 24
+        },
+        {
+          "seed": 4,
+          "sidePixels": 23,
+          "sideUnoccludedPixels": 38,
+          "topPixels": 1,
+          "topUnoccludedPixels": 31
+        },
+        {
+          "seed": 5,
+          "sidePixels": 22,
+          "sideUnoccludedPixels": 22,
+          "topPixels": 17,
+          "topUnoccludedPixels": 28
+        },
+        {
+          "seed": 6,
+          "sidePixels": 33,
+          "sideUnoccludedPixels": 72,
+          "topPixels": 29,
+          "topUnoccludedPixels": 33
+        },
+        {
+          "seed": 7,
+          "sidePixels": 21,
+          "sideUnoccludedPixels": 21,
+          "topPixels": 40,
+          "topUnoccludedPixels": 58
+        },
+        {
+          "seed": 8,
+          "sidePixels": 11,
+          "sideUnoccludedPixels": 42,
+          "topPixels": 7,
+          "topUnoccludedPixels": 32
+        },
+        {
+          "seed": 9,
+          "sidePixels": 23,
+          "sideUnoccludedPixels": 29,
+          "topPixels": 26,
+          "topUnoccludedPixels": 26
+        },
+        {
+          "seed": 10,
+          "sidePixels": 23,
+          "sideUnoccludedPixels": 23,
+          "topPixels": 17,
+          "topUnoccludedPixels": 30
+        }
+      ],
+      "fruit": {
+        "triangles": 481,
+        "draws": 2,
+        "bounds": [
+          0.010013654828071594,
+          0.015860937535762787,
+          0.01006021723151207
+        ]
+      }
+    },
+    {
+      "key": "raspberry",
+      "sweep": [
+        {
+          "seed": 1,
+          "fruitCounts": [
+            18,
+            9,
+            0
+          ],
+          "triangles": [
+            63828,
+            32157,
+            2562
+          ]
+        },
+        {
+          "seed": 2,
+          "fruitCounts": [
+            16,
+            7,
+            0
+          ],
+          "triangles": [
+            55888,
+            24709,
+            1758
+          ]
+        },
+        {
+          "seed": 3,
+          "fruitCounts": [
+            17,
+            8,
+            0
+          ],
+          "triangles": [
+            60255,
+            28676,
+            2356
+          ]
+        },
+        {
+          "seed": 4,
+          "fruitCounts": [
+            13,
+            6,
+            0
+          ],
+          "triangles": [
+            46767,
+            21754,
+            1958
+          ]
+        },
+        {
+          "seed": 5,
+          "fruitCounts": [
+            17,
+            4,
+            0
+          ],
+          "triangles": [
+            60907,
+            16392,
+            2732
+          ]
+        },
+        {
+          "seed": 6,
+          "fruitCounts": [
+            27,
+            11,
+            0
+          ],
+          "triangles": [
+            92413,
+            38437,
+            2488
+          ]
+        },
+        {
+          "seed": 7,
+          "fruitCounts": [
+            9,
+            3,
+            0
+          ],
+          "triangles": [
+            33687,
+            12021,
+            1824
+          ]
+        },
+        {
+          "seed": 8,
+          "fruitCounts": [
+            24,
+            8,
+            0
+          ],
+          "triangles": [
+            82880,
+            28916,
+            2552
+          ]
+        },
+        {
+          "seed": 9,
+          "fruitCounts": [
+            18,
+            6,
+            0
+          ],
+          "triangles": [
+            63810,
+            22546,
+            2568
+          ]
+        },
+        {
+          "seed": 10,
+          "fruitCounts": [
+            21,
+            4,
+            0
+          ],
+          "triangles": [
+            73293,
+            16054,
+            2484
+          ]
+        }
+      ],
+      "material": {
+        "map": true,
+        "normalMap": true,
+        "roughnessMap": true
+      },
+      "side": {
+        "triangles": 63829,
+        "draws": 5,
+        "bounds": [
+          1.3934646919369698,
+          0.9444444924592972,
+          1.4897768257651478
+        ]
+      },
+      "top": {
+        "triangles": 63829,
+        "draws": 5,
+        "bounds": [
+          1.3934646919369698,
+          0.9444444924592972,
+          1.4897768257651478
+        ]
+      },
+      "visibility": [
+        {
+          "seed": 1,
+          "sidePixels": 53,
+          "sideUnoccludedPixels": 60,
+          "topPixels": 8,
+          "topUnoccludedPixels": 51
+        },
+        {
+          "seed": 2,
+          "sidePixels": 52,
+          "sideUnoccludedPixels": 52,
+          "topPixels": 14,
+          "topUnoccludedPixels": 56
+        },
+        {
+          "seed": 3,
+          "sidePixels": 56,
+          "sideUnoccludedPixels": 66,
+          "topPixels": 40,
+          "topUnoccludedPixels": 58
+        },
+        {
+          "seed": 4,
+          "sidePixels": 0,
+          "sideUnoccludedPixels": 105,
+          "topPixels": 2,
+          "topUnoccludedPixels": 61
+        },
+        {
+          "seed": 5,
+          "sidePixels": 46,
+          "sideUnoccludedPixels": 46,
+          "topPixels": 42,
+          "topUnoccludedPixels": 59
+        },
+        {
+          "seed": 6,
+          "sidePixels": 59,
+          "sideUnoccludedPixels": 59,
+          "topPixels": 43,
+          "topUnoccludedPixels": 59
+        },
+        {
+          "seed": 7,
+          "sidePixels": 49,
+          "sideUnoccludedPixels": 49,
+          "topPixels": 61,
+          "topUnoccludedPixels": 74
+        },
+        {
+          "seed": 8,
+          "sidePixels": 49,
+          "sideUnoccludedPixels": 60,
+          "topPixels": 51,
+          "topUnoccludedPixels": 51
+        },
+        {
+          "seed": 9,
+          "sidePixels": 58,
+          "sideUnoccludedPixels": 71,
+          "topPixels": 0,
+          "topUnoccludedPixels": 59
+        },
+        {
+          "seed": 10,
+          "sidePixels": 46,
+          "sideUnoccludedPixels": 46,
+          "topPixels": 46,
+          "topUnoccludedPixels": 62
+        }
+      ],
+      "fruit": {
+        "triangles": 3200,
+        "draws": 2,
+        "bounds": [
+          0.018796520307660103,
+          0.026462312787771225,
+          0.018998736515641212
+        ]
+      }
+    }
+  ],
+  "errors": []
+}

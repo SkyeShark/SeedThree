@@ -2,6 +2,7 @@ import * as THREE from 'three/webgpu';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { prepareFruitGeometry, makeFruitMaterial } from './core/fruit.js';
+import { fruitUrl } from './core/fruit-assets.js';
 import { buildTree, makeBarkMaterial, makeCactusBarkMaterial, makeThatchBarkMaterial, forestBarkMaterial, MESHQ_DEFAULT } from './core/tree.js';
 import { makeFoliageMaterial } from './core/leaf-cards.js';
 import { makeYuccaMaterial } from './core/yucca-leaves.js';
@@ -178,7 +179,7 @@ async function loadSpeciesAssets(species, sunLight = null) {
   // once per species; geometry re-origined to the stem tip so instances hang.
   if (species.fruit?.mesh) {
     try {
-      const gltf = await new GLTFLoader().loadAsync(`assets/fruits/${species.fruit.mesh}`);
+      const gltf = await new GLTFLoader().loadAsync(fruitUrl(species.fruit.mesh));
       gltf.scene.updateMatrixWorld(true);
       let src = null;
       gltf.scene.traverse((o) => { if (o.isMesh && !src) src = o; });

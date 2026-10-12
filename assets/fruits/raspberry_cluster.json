@@ -1,0 +1,16 @@
+{
+  "asset": "raspberry_cluster",
+  "source": "authored procedural Blender source; decimated retopology; Cycles bake",
+  "triangles": 3199,
+  "dimensionsMeters": [
+    0.018796520307660103,
+    0.018998736515641212,
+    0.026462312787771225
+  ],
+  "maps": [
+    "base_color",
+    "normal",
+    "roughness"
+  ],
+  "mapSize": 512
+}

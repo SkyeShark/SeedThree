@@ -1,0 +1,16 @@
+{
+  "asset": "bilberry_berry",
+  "source": "authored procedural Blender source; decimated retopology; Cycles bake",
+  "triangles": 480,
+  "dimensionsMeters": [
+    0.010013654828071594,
+    0.01006021723151207,
+    0.015860937535762787
+  ],
+  "maps": [
+    "base_color",
+    "normal",
+    "roughness"
+  ],
+  "mapSize": 512
+}
