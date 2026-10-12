@@ -15,6 +15,7 @@ import { bakeBranchCards, bakeRosetteCards, disposeBranchCards, forestCardMateri
 import { buildRocks } from './core/rocks.js';
 import { buildFallenLimbs } from './core/fallen-limbs.js';
 import { buildGrass } from './core/grass.js';
+import { buildWildflowers } from './core/wildflowers.js';
 import { buildScrub } from './core/scrub.js';
 import { windStrength, windSpeed, sunDirectionUniform, WIND_DIR } from './core/wind.js';
 import { Rng } from './core/rng.js';
@@ -538,13 +539,17 @@ async function main() {
       if (limbs) group.add(limbs);
     }
     if (!isDesert) {
-      const [tuftTexture, tuftNormal, tuftRoughness] = await Promise.all([
+      const [tuftTexture, tuftNormal, tuftRoughness, wildflowerAtlas] = await Promise.all([
         loadTex(leafUrl('grass_tuft.png'), true),                       // foliage cards live in assets/leaves/ now
         loadTex(leafUrl('grass_tuft_normal.png'), false).catch(() => null),
         loadTex(leafUrl('grass_tuft_roughness.png'), false).catch(() => null),
+        loadTex(new URL('../assets/wildflowers/gorski-kotar-wildflower-atlas.png', import.meta.url).href, true),
       ]);
       const grass = buildGrass({ tuftTexture, tuftNormal, tuftRoughness, sampler, seed: state.controls.seed, flatRadius: 15 });
       if (grass) group.add(grass);
+      wildflowerAtlas.wrapS = wildflowerAtlas.wrapT = THREE.ClampToEdgeWrapping;
+      const wildflowers = buildWildflowers({ atlasTexture: wildflowerAtlas, sampler, seed: state.controls.seed, flatRadius: 15 });
+      if (wildflowers) group.add(wildflowers);
     } else {
       // Desert scrub in place of grass: sagebrush / blackbrush / creosote alpha
       // cards (skipped gracefully until Codex paints them).

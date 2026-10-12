@@ -1,0 +1,18 @@
+{
+  "base": "cf2eaad39d9b7355ed086aca2a95fb785e539242",
+  "wind": 0,
+  "postProcessing": false,
+  "results": [
+    {
+      "key": "wildflowers",
+      "triangles": 251,
+      "draws": 2,
+      "bounds": [
+        3.5450964272022247,
+        1.0021454095840454,
+        0.7299375832080841
+      ]
+    }
+  ],
+  "errors": []
+}
