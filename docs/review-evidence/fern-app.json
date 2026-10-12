@@ -1,0 +1,19 @@
+{
+  "status": {
+    "species": "commonFern",
+    "fernAssetsLoaded": true,
+    "hasFallenLimbs": false,
+    "renderer": true,
+    "testCondition": "fern startup; main-thread billboard bake; native WebGPU",
+    "shaderErrors": {
+      "calls": 21,
+      "frameCalls": 3,
+      "drawCalls": 26,
+      "triangles": 1336877,
+      "points": 0,
+      "lines": 0,
+      "timestamp": 0
+    }
+  },
+  "errors": []
+}

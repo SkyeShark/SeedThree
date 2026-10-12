@@ -1,0 +1,162 @@
+{
+  "base": "cf2eaad39d9b7355ed086aca2a95fb785e539242",
+  "wind": 0,
+  "postProcessing": false,
+  "results": [
+    {
+      "key": "commonFern",
+      "sweep": [
+        {
+          "seed": 1,
+          "fruitCounts": [
+            0,
+            0,
+            0
+          ],
+          "triangles": [
+            176,
+            70,
+            24
+          ]
+        },
+        {
+          "seed": 2,
+          "fruitCounts": [
+            0,
+            0,
+            0
+          ],
+          "triangles": [
+            176,
+            70,
+            24
+          ]
+        },
+        {
+          "seed": 3,
+          "fruitCounts": [
+            0,
+            0,
+            0
+          ],
+          "triangles": [
+            176,
+            70,
+            24
+          ]
+        },
+        {
+          "seed": 4,
+          "fruitCounts": [
+            0,
+            0,
+            0
+          ],
+          "triangles": [
+            176,
+            70,
+            24
+          ]
+        },
+        {
+          "seed": 5,
+          "fruitCounts": [
+            0,
+            0,
+            0
+          ],
+          "triangles": [
+            176,
+            70,
+            24
+          ]
+        },
+        {
+          "seed": 6,
+          "fruitCounts": [
+            0,
+            0,
+            0
+          ],
+          "triangles": [
+            176,
+            70,
+            24
+          ]
+        },
+        {
+          "seed": 7,
+          "fruitCounts": [
+            0,
+            0,
+            0
+          ],
+          "triangles": [
+            176,
+            70,
+            24
+          ]
+        },
+        {
+          "seed": 8,
+          "fruitCounts": [
+            0,
+            0,
+            0
+          ],
+          "triangles": [
+            176,
+            70,
+            24
+          ]
+        },
+        {
+          "seed": 9,
+          "fruitCounts": [
+            0,
+            0,
+            0
+          ],
+          "triangles": [
+            176,
+            70,
+            24
+          ]
+        },
+        {
+          "seed": 10,
+          "fruitCounts": [
+            0,
+            0,
+            0
+          ],
+          "triangles": [
+            176,
+            70,
+            24
+          ]
+        }
+      ],
+      "material": null,
+      "side": {
+        "triangles": 177,
+        "draws": 4,
+        "bounds": [
+          1.459894327581365,
+          0.4051947221159935,
+          1.4130081200933104
+        ]
+      },
+      "top": {
+        "triangles": 177,
+        "draws": 4,
+        "bounds": [
+          1.459894327581365,
+          0.4051947221159935,
+          1.4130081200933104
+        ]
+      }
+    }
+  ],
+  "errors": []
+}

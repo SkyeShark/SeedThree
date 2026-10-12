@@ -163,8 +163,16 @@ export function buildGUI(opts) {
     if (!cMobile) return;
     const sp = speciesMap[state.speciesKey];
     const isRosette = sp?.foliageType === 'rosette';
+    const isFern = sp?.foliageType === 'fern';
     const isCactus = isRosette && !!sp?.cactus;   // saguaro: spines, fluted ribs
     const isWillow = sp?.foliage?.mode === 'willowCurtains';
+    if (isFern) {
+      for (const controller of [cMobile, cMeshQ, cLod0Den, cLod1Pct, cLod2Pct,
+        cLod1Den, cLod2Den, cLod1Prn, cLod2Prn, cCardRes, cCardVariants]) {
+        controller?.show(false);
+      }
+      return;
+    }
     cMobile.show(true);                            // mobile target works on both generator paths
     const m = !!optState?.mobileTarget;           // mobile ladder (temperate cards OR rosette lighter-cone near)
     // ROSETTE path (Joshua/yucca/saguaro): budget% and prune don't apply (no branch
@@ -232,7 +240,9 @@ export function buildGUI(opts) {
     if (sp.foliage !== false) {
       shape.add(proxy, 'showLeaves').name('Show leaves').onChange((v) => { state.controls.showLeaves = v; onChange(); });
     }
-    shape.add(proxy, 'tileWorldSize', 0.6, 3.0, 0.05).name('Bark tiling (m)').onChange((v) => { state.controls.tileWorldSize = v; onChange(); });
+    if (sp.bark) {
+      shape.add(proxy, 'tileWorldSize', 0.6, 3.0, 0.05).name('Bark tiling (m)').onChange((v) => { state.controls.tileWorldSize = v; onChange(); });
+    }
   }
   buildParamControls();
 
@@ -245,10 +255,12 @@ export function buildGUI(opts) {
     advanced.controllers.slice().forEach((ct) => ct.destroy());
     const sp = speciesMap[state.speciesKey];
     const isRosette = sp.foliageType === 'rosette';
+    const isFern = sp.foliageType === 'fern';
+    const isDirect = isRosette || isFern;
     const advList = sp.advancedControls;
-    advanced.domElement.style.display = (isRosette && !advList?.length) ? 'none' : '';
-    if (advanced.title) advanced.title(isRosette ? 'Advanced: L-system' : 'Advanced: branch levels');
-    if (isRosette) {
+    advanced.domElement.style.display = (isDirect && !advList?.length) ? 'none' : '';
+    if (advanced.title) advanced.title(isFern ? 'Advanced: fronds' : isRosette ? 'Advanced: L-system' : 'Advanced: branch levels');
+    if (isDirect) {
       // Flat dichotomous-generator params (fork angle/thickness, candelabra set,
       // trunk flare, anti-intersection, …). Same {get,set} pattern as Shape dials.
       for (const d of advList ?? []) {
@@ -298,6 +310,7 @@ export function buildGUI(opts) {
     bark.controllers.slice().forEach((ct) => ct.destroy());
     const sp = speciesMap[state.speciesKey];
     const isRosette = sp.foliageType === 'rosette';
+    const isFern = sp.foliageType === 'fern';
     const isHangingSpray = sp.foliage?.mode === 'hangingSprays' || sp.foliage?.mode === 'willowCurtains';
     const isCactus = !!sp.cactus;              // saguaro → spines
     const isFrondRosette = isRosette && !isCactus; // Joshua/yuccas → fronds
@@ -309,13 +322,13 @@ export function buildGUI(opts) {
       // texture toward it (luminance-preserving — keeps vein/shading detail).
       leaves.addColor(proxy, 'leafColorize').name('Tint').onChange(mtweak('leafColorize'));
       leaves.add(proxy, 'leafTintAmount', 0, 1, 0.01).name('Tint amount').onChange(mtweak('leafTintAmount'));
-      if (!isHangingSpray) {
+      if (!isHangingSpray && !isFern) {
         leaves.add(proxy, 'leafAngle', 0, 100, 1).name('Angle').onChange(geom('leafAngle'));
         leaves.add(proxy, 'leafStart', 0, 1, 0.01).name('Start').onChange(geom('leafStart'));
         leaves.add(proxy, 'leafSizeVar', 0, 1, 0.01).name('Size variance').onChange(geom('leafSizeVar'));
       }
       leaves.add(proxy, 'leafAlpha', 0, 1, 0.01).name('Alpha test').onChange(mtweak('leafAlpha'));
-      leaves.add(proxy, 'leafQuads', { 'Single': 1, 'Crossed (double)': 2 }).name('Billboard').onChange(geom('leafQuads'));
+      if (!isFern) leaves.add(proxy, 'leafQuads', { 'Single': 1, 'Crossed (double)': 2 }).name('Billboard').onChange(geom('leafQuads'));
     }
     // Fronds (Joshua/yuccas): recolor each age stage (green→dry→dryest) and bias
     // the whole plant along that ramp. Live material tweaks — no rebuild.
@@ -331,8 +344,11 @@ export function buildGUI(opts) {
     if (isCactus) {
       spines.addColor(proxy, 'spineTint').name('Spine tint').onChange(mtweak('spineTint'));
     }
-    bark.addColor(proxy, 'barkTint').name('Tint').onChange(mtweak('barkTint'));
-    bark.add(proxy, 'barkFlat').name('Flat shading').onChange(mtweak('barkFlat'));
+    bark.domElement.style.display = sp.bark ? '' : 'none';
+    if (sp.bark) {
+      bark.addColor(proxy, 'barkTint').name('Tint').onChange(mtweak('barkTint'));
+      bark.add(proxy, 'barkFlat').name('Flat shading').onChange(mtweak('barkFlat'));
+    }
     // Bark damage lives with the BARK material (it's the cactus skin, not the
     // spines): how much scarred skin blends over the clean base via the world-space
     // low-freq mask (never tiles). 0 = pristine, 1 = heavy.
