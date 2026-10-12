@@ -1,0 +1,162 @@
+{
+  "base": "cf2eaad39d9b7355ed086aca2a95fb785e539242",
+  "wind": 0,
+  "postProcessing": false,
+  "results": [
+    {
+      "key": "commonHornbeam",
+      "sweep": [
+        {
+          "seed": 1,
+          "fruitCounts": [
+            0,
+            0,
+            0
+          ],
+          "triangles": [
+            5490,
+            3776,
+            2986
+          ]
+        },
+        {
+          "seed": 2,
+          "fruitCounts": [
+            0,
+            0,
+            0
+          ],
+          "triangles": [
+            4462,
+            2948,
+            2334
+          ]
+        },
+        {
+          "seed": 3,
+          "fruitCounts": [
+            0,
+            0,
+            0
+          ],
+          "triangles": [
+            6086,
+            4204,
+            3332
+          ]
+        },
+        {
+          "seed": 4,
+          "fruitCounts": [
+            0,
+            0,
+            0
+          ],
+          "triangles": [
+            6014,
+            4104,
+            3254
+          ]
+        },
+        {
+          "seed": 5,
+          "fruitCounts": [
+            0,
+            0,
+            0
+          ],
+          "triangles": [
+            4146,
+            2652,
+            2092
+          ]
+        },
+        {
+          "seed": 6,
+          "fruitCounts": [
+            0,
+            0,
+            0
+          ],
+          "triangles": [
+            4326,
+            2836,
+            2240
+          ]
+        },
+        {
+          "seed": 7,
+          "fruitCounts": [
+            0,
+            0,
+            0
+          ],
+          "triangles": [
+            4146,
+            2784,
+            2190
+          ]
+        },
+        {
+          "seed": 8,
+          "fruitCounts": [
+            0,
+            0,
+            0
+          ],
+          "triangles": [
+            4678,
+            3128,
+            2472
+          ]
+        },
+        {
+          "seed": 9,
+          "fruitCounts": [
+            0,
+            0,
+            0
+          ],
+          "triangles": [
+            6178,
+            4272,
+            3386
+          ]
+        },
+        {
+          "seed": 10,
+          "fruitCounts": [
+            0,
+            0,
+            0
+          ],
+          "triangles": [
+            6134,
+            4244,
+            3364
+          ]
+        }
+      ],
+      "material": null,
+      "side": {
+        "triangles": 5491,
+        "draws": 4,
+        "bounds": [
+          1.3836671002209187,
+          0.9090738575905561,
+          1.2736963015049696
+        ]
+      },
+      "top": {
+        "triangles": 5491,
+        "draws": 4,
+        "bounds": [
+          1.3836671002209187,
+          0.9090738575905561,
+          1.2736963015049696
+        ]
+      }
+    }
+  ],
+  "errors": []
+}

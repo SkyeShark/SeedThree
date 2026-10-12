@@ -4,6 +4,7 @@ import { redMaple } from './red-maple.js';
 import { tulipPoplar } from './tulip-poplar.js';
 import { sweetgum } from './sweetgum.js';
 import { americanBeech } from './american-beech.js';
+import { commonHornbeam } from './common-hornbeam.js';
 import { joshuaTree } from './joshua-tree.js';
 import { saguaro } from './saguaro.js';
 import { pine } from './pine.js';
@@ -26,6 +27,7 @@ export const SPECIES = {
   tulipPoplar,
   sweetgum,
   americanBeech,
+  commonHornbeam,
   pine,
   loblolly,
   douglasFir,
