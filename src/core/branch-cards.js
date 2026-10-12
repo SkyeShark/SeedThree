@@ -33,6 +33,127 @@ import { foliageWindPosition, sunDirectionUniform, WIND_DIR } from './wind.js';
 const MAX_CARD_INSTANCES = 4096; // aThickness allocation on the shared geometry
 const TRANSMIT = [0.42, 0.62, 0.24];
 
+
+// Consumers with persistent branch-card atlases should include this revision in
+// their cache key. Revision 6 combines the corrected source translucency and
+// upstream multi-view/fruit baking with the bounded coverage and underlay.
+export const BRANCH_CARD_BAKE_REVISION = 6;
+// Placement/cache revisions must not reshuffle pixels inside the detailed
+// branch-card atlas. Keep this content stream pinned until the fill cohort
+// itself intentionally changes.
+export const BRANCH_CARD_COVERAGE_CONTENT_REVISION = 4;
+export const BRANCH_CARD_COVERAGE_DEFAULTS = Object.freeze({
+  maxCoverage: 2,
+  // Temporary bake-source cost only. With the default crossed-leaf geometry
+  // this permits at most 512 extra leaves / 2,048 extra triangles per exemplar.
+  extraTriangleBudget: 2048,
+});
+export const BRANCH_CARD_LIVE_COVERAGE_DEFAULTS = Object.freeze({
+  // One extra plane is enough to keep a branch card readable from every
+  // azimuth. More planes add overdraw without a useful silhouette gain.
+  maxRadialPlanes: 2,
+  trianglesPerPlane: 2,
+});
+export const BRANCH_CARD_CROWN_UNDERLAY_DEFAULTS = Object.freeze({
+  // Multi-leader species may need one crown card per root. Keep authored or
+  // generated outliers from turning the underlay into an unbounded cohort.
+  maxRootCards: 4,
+  radialPlanes: 2,
+  trianglesPerPlane: 2,
+  lateralScale: 1,
+  maxLateralScale: 1.35,
+});
+
+export function branchCardCoverageRngSeed(speciesName, variantIndex) {
+  return `${speciesName}:cards:${variantIndex}:coverage-v${BRANCH_CARD_COVERAGE_CONTENT_REVISION}`;
+}
+
+function boundedCrownUnderlayLateralScale(value) {
+  const requested = Number.isFinite(value)
+    ? value
+    : BRANCH_CARD_CROWN_UNDERLAY_DEFAULTS.lateralScale;
+  return Math.max(
+    BRANCH_CARD_CROWN_UNDERLAY_DEFAULTS.lateralScale,
+    Math.min(BRANCH_CARD_CROWN_UNDERLAY_DEFAULTS.maxLateralScale, requested),
+  );
+}
+
+/** Fixed runtime cost policy for the opt-in whole-crown continuity underlay. */
+export function planBranchCardCrownUnderlay(foliage = {}, rootStemCount = 0) {
+  const enabled = foliage.cardCrownUnderlay === true;
+  const lateralScale = enabled
+    ? boundedCrownUnderlayLateralScale(foliage.cardCrownUnderlayLateralScale)
+    : BRANCH_CARD_CROWN_UNDERLAY_DEFAULTS.lateralScale;
+  const availableRoots = Math.max(
+    0,
+    Math.floor(Number.isFinite(rootStemCount) ? rootStemCount : 0),
+  );
+  const rootCardInstances = enabled
+    ? Math.min(BRANCH_CARD_CROWN_UNDERLAY_DEFAULTS.maxRootCards, availableRoots)
+    : 0;
+  const runtimeTrianglesPerCard = BRANCH_CARD_CROWN_UNDERLAY_DEFAULTS.radialPlanes
+    * BRANCH_CARD_CROWN_UNDERLAY_DEFAULTS.trianglesPerPlane;
+  return {
+    bakeRevision: BRANCH_CARD_BAKE_REVISION,
+    enabled,
+    availableRoots,
+    rootCardInstances,
+    radialPlanes: BRANCH_CARD_CROWN_UNDERLAY_DEFAULTS.radialPlanes,
+    lateralScale,
+    runtimeTrianglesPerCard,
+    runtimeTrianglesAdded: rootCardInstances * runtimeTrianglesPerCard,
+    runtimeDrawsAdded: rootCardInstances > 0 ? 1 : 0,
+  };
+}
+
+/**
+ * Bake a required set of branch-card jobs as one transaction. Nothing escapes
+ * until every job succeeds; a thrown error or null set releases all completed
+ * atlases/geometry/materials so callers can safely leave their cache untouched
+ * and retry later.
+ */
+export async function bakeBranchCardSetsAtomic(jobs, bakeJob) {
+  const byLevel = new Map();
+  try {
+    for (const job of jobs) {
+      const jobKey = job.key ?? `${job.level}:${job.foliageOnly ? 'fol' : 'full'}`;
+      if (byLevel.has(jobKey)) continue;
+      const set = await bakeJob(job, jobKey);
+      if (!set) {
+        throw new Error(`required branch-card bake "${jobKey}" returned no card set`);
+      }
+      byLevel.set(jobKey, set);
+    }
+    return byLevel;
+  } catch (error) {
+    disposeBranchCards({ byLevel });
+    throw error;
+  }
+}
+
+/** Cache only a fully assembled atomic card-set transaction. */
+export async function ensureBranchCardCacheEntryAtomic(
+  cache,
+  cacheKey,
+  jobs,
+  bakeJob,
+  createEntry,
+) {
+  const cached = cache.get(cacheKey);
+  if (cached) return cached;
+  const byLevel = await bakeBranchCardSetsAtomic(jobs, bakeJob);
+  try {
+    const entry = createEntry(byLevel);
+    if (!entry) throw new Error('required branch-card facade could not be assembled');
+    cache.set(cacheKey, entry);
+    return entry;
+  } catch (error) {
+    disposeBranchCards({ byLevel });
+    throw error;
+  }
+}
+
+
 const chordVec = (stem, out) =>
   out.copy(stem.points[stem.points.length - 1]).sub(stem.points[0]);
 
@@ -59,6 +180,101 @@ function rebaseStem(stem) {
 }
 
 // parentId → [children] index over a flat stem list (see weber-penn topology).
+export function planBranchCardCoverage(foliage = {}, terminalStemCount = 0, opts = {}) {
+  const stems = Math.max(
+    0,
+    Math.floor(Number.isFinite(terminalStemCount) ? terminalStemCount : 0),
+  );
+  const baseLeavesPerBranch = Math.max(
+    0,
+    Math.round(Number.isFinite(foliage.leavesPerBranch) ? foliage.leavesPerBranch : 14),
+  );
+  const quads = Math.max(
+    1,
+    Math.round(Number.isFinite(foliage.quads) ? foliage.quads : 2),
+  );
+  const trianglesPerLeaf = quads * 2;
+  const rawCoverage = opts.coverage ?? foliage.cardCoverage ?? 1;
+  const coverage = Math.min(
+    BRANCH_CARD_COVERAGE_DEFAULTS.maxCoverage,
+    Math.max(1, Number.isFinite(rawCoverage) ? rawCoverage : 1),
+  );
+  const requestedLeavesPerBranch = Math.max(
+    baseLeavesPerBranch,
+    Math.round(baseLeavesPerBranch * coverage),
+  );
+  const extraTriangleBudget = Math.max(
+    0,
+    Math.floor(Number.isFinite(opts.extraTriangleBudget)
+      ? opts.extraTriangleBudget
+      : BRANCH_CARD_COVERAGE_DEFAULTS.extraTriangleBudget),
+  );
+  const requestedExtraLeavesPerBranch = requestedLeavesPerBranch - baseLeavesPerBranch;
+  const affordableExtraLeavesPerBranch = stems > 0
+    ? Math.floor(extraTriangleBudget / (stems * trianglesPerLeaf))
+    : 0;
+  const extraLeavesPerBranch = Math.max(
+    0,
+    Math.min(requestedExtraLeavesPerBranch, affordableExtraLeavesPerBranch),
+  );
+  const sourceLeafInstances = stems * baseLeavesPerBranch;
+  const requestedLeafInstances = stems * requestedLeavesPerBranch;
+  const extraBakeLeafInstances = stems * extraLeavesPerBranch;
+  const extraBakeTriangles = extraBakeLeafInstances * trianglesPerLeaf;
+
+  return {
+    bakeRevision: BRANCH_CARD_BAKE_REVISION,
+    terminalStemCount: stems,
+    baseLeavesPerBranch,
+    requestedLeavesPerBranch,
+    extraLeavesPerBranch,
+    sourceLeafInstances,
+    requestedLeafInstances,
+    bakeLeafInstances: sourceLeafInstances + extraBakeLeafInstances,
+    extraBakeLeafInstances,
+    trianglesPerLeaf,
+    extraBakeTriangles,
+    extraTriangleBudget,
+    coverageRequested: Number.isFinite(rawCoverage) ? rawCoverage : 1,
+    coverageApplied: coverage,
+    coverageRealized: baseLeavesPerBranch > 0
+      ? (baseLeavesPerBranch + extraLeavesPerBranch) / baseLeavesPerBranch
+      : 1,
+    budgetLimited: extraLeavesPerBranch < requestedExtraLeavesPerBranch,
+    runtimeCardInstancesAdded: 0,
+  };
+}
+
+export function prepareBranchCardFoliageStems(leafStems, opts = {}) {
+  if (!opts.foliageOnly || opts.preserveFoliageLayout) return leafStems;
+  return leafStems.map((s) => {
+    let acc = 0;
+    const points = s.points.map((p, index) => {
+      if (index > 0) acc += p.distanceTo(s.points[index - 1]);
+      return new Vector3(0, acc, 0);
+    });
+    return {
+      ...s,
+      points,
+      orients: s.orients.map(() => new Quaternion()),
+    };
+  });
+}
+
+function resolveRadialPlanes(foliage = {}) {
+  const requested = Number.isFinite(foliage.cardRadialPlanes)
+    ? Math.round(foliage.cardRadialPlanes)
+    : 1;
+  return Math.max(
+    1,
+    Math.min(BRANCH_CARD_LIVE_COVERAGE_DEFAULTS.maxRadialPlanes, requested),
+  );
+}
+
+function geometryRadialPlanes(geometry) {
+  return geometry?.userData?.cardRadialPlanes ?? (geometry?.index?.count === 12 && geometry?.attributes?.position?.count === 8 ? 2 : 1);
+}
+
 function childrenMap(stems) {
   const m = new Map();
   for (const s of stems) {
@@ -140,7 +356,41 @@ function rebaseGravitySubtree(subtree, root) {
 // whose screen-right is world -z — so U runs from +z to -z). Both planes contain
 // the chord axis, so a crossed pair shares ONE instance transform and the 90° is
 // baked into the side quad's vertices — the pair can never shear apart.
+function multiPlaneCardGeometry(center, halfW, halfH, radialPlanes = 1) {
+  const geo = new BufferGeometry();
+  const x0 = center.x - halfW, x1 = center.x + halfW;
+  const y0 = center.y - halfH, y1 = center.y + halfH;
+  const planes = Math.max(
+    1,
+    Math.min(BRANCH_CARD_LIVE_COVERAGE_DEFAULTS.maxRadialPlanes, radialPlanes),
+  );
+  const positions = [];
+  const normals = [];
+  const uvs = [];
+  const indices = [];
+  const corners = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+  for (let plane = 0; plane < planes; plane++) {
+    const angle = plane * Math.PI / 2;
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    const base = plane * 4;
+    for (const [x, y] of corners) {
+      positions.push(x * cos, y, -x * sin);
+      normals.push(sin, 0, cos);
+    }
+    uvs.push(0, 0, 1, 0, 1, 1, 0, 1);
+    indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  }
+  geo.setAttribute('position', new BufferAttribute(new Float32Array(positions), 3));
+  geo.setAttribute('normal', new BufferAttribute(new Float32Array(normals), 3));
+  geo.setAttribute('uv', new BufferAttribute(new Float32Array(uvs), 2));
+  geo.setIndex(indices);
+  geo.userData.cardRadialPlanes = planes;
+  return geo;
+}
+
 function cardQuadGeometry(center, halfW, halfH, view = 'front') {
+  if (typeof view === 'number') return multiPlaneCardGeometry(center, halfW, halfH, view);
   const geo = new BufferGeometry();
   const y0 = center.y - halfH, y1 = center.y + halfH;
   if (view === 'side') {
@@ -269,6 +519,13 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
   if (!assets.leafMat || !assets.barkMat) return null;
   const variantCount = opts.variants ?? 3;
   const size = opts.size ?? 512;
+  const instanceCapacity = Number.isFinite(opts.instanceCapacity)
+    ? Math.max(1, Math.min(MAX_CARD_INSTANCES, Math.floor(opts.instanceCapacity)))
+    : MAX_CARD_INSTANCES;
+  const radialPlanes = Number.isFinite(opts.radialPlanes)
+    ? Math.max(1, Math.min(BRANCH_CARD_LIVE_COVERAGE_DEFAULTS.maxRadialPlanes, Math.round(opts.radialPlanes)))
+    : resolveRadialPlanes(species.foliage);
+  const coverageTelemetry = [];
   const willowCurtains = species.foliage?.mode === 'willowCurtains';
   const gravityAligned = willowCurtains && !!opts.gravityAligned;
   const crossViews = gravityAligned || !!opts.crossViews;
@@ -337,11 +594,7 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
     const leafStems = subTerminals.length ? subTerminals : sub;
     // Willow curtains synthesize their curved vines FROM the real feeder curve.
     // Straightening the foliage-only exemplar would erase their attachment arc.
-    const bakeStems = (!opts.foliageOnly || willowCurtains) ? leafStems : leafStems.map((s) => {
-      let acc = 0;
-      const pts = s.points.map((p, j) => { if (j > 0) acc += p.distanceTo(s.points[j - 1]); return new Vector3(0, acc, 0); });
-      return { ...s, points: pts, orients: s.orients.map(() => new Quaternion()) };
-    });
+    const bakeStems = prepareBranchCardFoliageStems(leafStems, { ...opts, preserveFoliageLayout: opts.preserveFoliageLayout || willowCurtains });
     // Ordinary species bake their LOD0 leaves; authored hanging sprays must retain
     // their top-anchor/guide grammar or the bake silently turns them back into leaves.
     const bakeMode = willowCurtains
@@ -363,6 +616,29 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
     };
     const leaves = buildFoliage(bakeStems, bakeCfg, frng, assets.leafMat, null);
     if (leaves) group.add(leaves);
+    const coveragePlan = planBranchCardCoverage(bakeCfg, bakeStems.length, {
+      coverage: opts.coverage,
+      extraTriangleBudget: opts.extraTriangleBudget,
+    });
+    let coverageLeaves = null;
+    if (coveragePlan.extraLeavesPerBranch > 0) {
+      const coverageRng = new Rng(branchCardCoverageRngSeed(species.name, vi));
+      coverageLeaves = buildFoliage(
+        bakeStems,
+        { ...bakeCfg, leavesPerBranch: coveragePlan.extraLeavesPerBranch },
+        coverageRng,
+        assets.leafMat,
+        null,
+      );
+      if (coverageLeaves) group.add(coverageLeaves);
+    }
+    coverageTelemetry.push({
+      variantIndex: vi,
+      cardLevel,
+      foliageOnly: !!opts.foliageOnly,
+      ...coveragePlan,
+    });
+
     // Fruit bakes INTO the cards (orchard species): the reduced LODs delete
     // the real fruit instances, so without this the tree visibly de-fruits at
     // the LOD2 switch. Anchored on the same (possibly straightened) stems the
@@ -373,16 +649,23 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
       const fruit = buildFruits(bakeStems, perCard, fruitRng, assets.fruitGeo, assets.fruitMat);
       if (fruit) group.add(fruit);
     }
-    if (!group.children.length) continue; // foliage-only exemplar with no leaves → nothing to bake
+    if (!group.children.length) {
+      twigGeo?.dispose(); leaves?.geometry.dispose(); coverageLeaves?.geometry.dispose();
+      continue;
+    }
 
     if (leaves) leaves.computeBoundingBox?.();
+    if (coverageLeaves) coverageLeaves.computeBoundingBox?.();
     const box = new Box3().setFromObject(group);
     const center = box.getCenter(new Vector3());
     const sz = box.getSize(new Vector3());
     // Each orthographic view frames its own screen-horizontal extent. Using the
     // larger X/Z dimension for both made crossed willow sheets inflate the live
     // crown by 8–14% when the exemplar was much deeper than it was wide.
-    const halfWByView = { front: Math.max(0.01, sz.x * 0.51), side: Math.max(0.01, sz.z * 0.51) };
+    const halfW = Math.max(0.01, Math.max(sz.x, sz.z) * 0.51);
+    const halfWByView = crossViews
+      ? { front: Math.max(0.01, sz.x * 0.51), side: Math.max(0.01, sz.z * 0.51) }
+      : { front: halfW, side: halfW };
     const halfH = (sz.y / 2) * 1.02;
     const depth = Math.max(sz.x, sz.z) + 2;
     // crossViews (limb sets placed as CROSSED PAIRS): bake a REAL side view too,
@@ -398,12 +681,14 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
       cam.lookAt(center);
       views.push({ name, camera: cam });
     }
-    const bakedAll = await bakeGroupToTextures(renderer, group, views, { size, dilate: 10 });
+    let bakedAll;
+    try {
+      bakedAll = await bakeGroupToTextures(renderer, group, views, { size, dilate: 10, yield: opts.yield, onRendererBusyChange: opts.onRendererBusyChange });
+    } finally {
+      group.traverse(object => { if (object.isInstancedMesh) object.dispose(); });
+      twigGeo?.dispose(); leaves?.geometry.dispose(); coverageLeaves?.geometry.dispose();
+    }
     const baked = bakedAll.front;
-
-    // Bake-only geometry is disposable; the card quad is cached across rebuilds.
-    twigGeo?.dispose();
-    if (leaves) leaves.geometry.dispose();
 
     // per-instance wind heading×weight + anchor point (sway phase) — values
     // written per rebuild by buildCardFoliage. Weight is PACKED into aWindVec:
@@ -419,7 +704,7 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
         : 1;
       const geo = gravityAligned
         ? bowedCardGeometry(center, halfW, halfH, view, horizontalScale, verticalScale)
-        : cardQuadGeometry(center, halfW, halfH, view);
+        : cardQuadGeometry(center, halfW, halfH, crossViews ? view : radialPlanes);
       if (gravityAligned) {
         // Retain the analytic surface recipe so farther mobile rungs can rebuild
         // the same bowed sheet on a cheaper grid without rebaking its texture.
@@ -428,9 +713,9 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
         };
       }
       geo.userData.shared = true; // disposeTree must NOT free cached card geometry
-      addThicknessAttribute(geo, MAX_CARD_INSTANCES, thicknessRng);
-      geo.setAttribute('aWindVec', new InstancedBufferAttribute(new Float32Array(MAX_CARD_INSTANCES * 3), 3));
-      geo.setAttribute('aAnchorPos', new InstancedBufferAttribute(new Float32Array(MAX_CARD_INSTANCES * 3), 3));
+      addThicknessAttribute(geo, instanceCapacity, thicknessRng);
+      geo.setAttribute('aWindVec', new InstancedBufferAttribute(new Float32Array(instanceCapacity * 3), 3));
+      geo.setAttribute('aAnchorPos', new InstancedBufferAttribute(new Float32Array(instanceCapacity * 3), 3));
       return geo;
     };
     const geometry = cardGeo('front');
@@ -461,6 +746,7 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
     foliageOnly: !!opts.foliageOnly,
     preserveGuideLength: species.foliage?.mode === 'hangingSprays',
     gravityAligned,
+    coverageTelemetry,
     floorMin,
   } : null;
 }
@@ -599,7 +885,7 @@ export function buildCardFoliage(terminalStems, cards, rng, opts = {}) {
   // keeps the limb readable from every azimuth for +2 tris per limb.
   // opts.copies overrides the fan count (rosette terminal cards use 4 — the
   // crown is near-rotationally-symmetric, so one bake serves all four planes).
-  const copies = opts.copies ?? (opts.crossed ? 2 : 1);
+  const lateralScale = boundedCrownUnderlayLateralScale(opts.lateralScale);
   const { variants, centerUniform } = cards;
   const gravityAligned = !!cards.gravityAligned;
   if (!terminalStems.length || !variants.length) return null;
@@ -650,6 +936,8 @@ export function buildCardFoliage(terminalStems, cards, rng, opts = {}) {
   for (const [vi, list] of buckets.entries()) {
     if (!list.length) continue;
     const variant = variants[vi];
+    const radialPlanes = geometryRadialPlanes(variant.geometry);
+    const copies = opts.copies ?? (opts.crossed && radialPlanes < 2 ? 2 : 1);
     // Crossed pairs with a REAL side bake (variant.side) put the 90° in the SIDE
     // GEOMETRY and give both meshes the SAME instance transform — the two views
     // agree at the seam (no branch-intersection gaps) and can never shear apart.
@@ -688,9 +976,8 @@ export function buildCardFoliage(terminalStems, cards, rng, opts = {}) {
       }
       return geo;
     };
-    const maxStems = paired
-      ? MAX_CARD_INSTANCES
-      : Math.floor(MAX_CARD_INSTANCES / Math.max(1, copies));
+    const capacity = Math.min(MAX_CARD_INSTANCES, variant.geometry.attributes.aThickness?.count ?? MAX_CARD_INSTANCES);
+    const maxStems = paired ? capacity : Math.floor(capacity / Math.max(1, copies));
     const placed = list.length > maxStems ? list.slice(0, maxStems) : list;
     if (placed.length < list.length) {
       console.warn(
@@ -703,6 +990,17 @@ export function buildCardFoliage(terminalStems, cards, rng, opts = {}) {
       : [{ geo: mk(variant.geometry), mat: variant.material }];
     const perMesh = paired ? placed.length : placed.length * copies;
     const meshes = parts.map((p, pi) => {
+      // Small caller-owned diagnostic/card geometries may start with fewer
+      // wind slots than their crossed placement. Allocate the complete cohort
+      // before writing; baked sets remain bounded by their thickness capacity.
+      for (const name of ['aWindVec', 'aAnchorPos']) {
+        const attr = p.geo.getAttribute(name);
+        if (attr && attr.count < perMesh) {
+          const values = new Float32Array(perMesh * attr.itemSize);
+          values.set(attr.array);
+          p.geo.setAttribute(name, new InstancedBufferAttribute(values, attr.itemSize));
+        }
+      }
       const im = new InstancedMesh(p.geo, p.mat, perMesh);
       im.name = `cards${vi}${paired ? (pi ? '_side' : '_front') : ''}`;
       return im;
@@ -720,7 +1018,7 @@ export function buildCardFoliage(terminalStems, cards, rng, opts = {}) {
       // weight so the card moves like the foliage it stands in for — EXCEPT when
       // the caller pins windAt:'base' (rosette terminal cards: their joint with
       // the arm stub is visible, and tip amplitude slides the card off the arm).
-      const useTip = opts.windAt ? opts.windAt === 'tip' : copies > 1;
+      const useTip = opts.windAt ? opts.windAt === 'tip' : !!opts.crossed || copies > 1;
       const weight = useTip
         ? (stem.winds?.[stem.winds.length - 1] ?? stem.winds?.[0] ?? 0.6)
         : (stem.winds?.[0] ?? 0.6);
@@ -754,7 +1052,7 @@ export function buildCardFoliage(terminalStems, cards, rng, opts = {}) {
         }
       }
       if (s < 0.03) continue;
-      scl.set(s, s, s);
+      scl.set(s * lateralScale, s, s * lateralScale);
       const rolls = paired ? [roll] : Array.from({ length: copies }, (_, ci) => roll + ci * Math.PI / copies);
       for (const r of rolls) {
         qRoll.setFromAxisAngle(Y, r);
@@ -762,6 +1060,7 @@ export function buildCardFoliage(terminalStems, cards, rng, opts = {}) {
         // wind heading×weight in card-local space + anchor for sway phase (wind.js)
         qInv.copy(q).invert();
         wv.copy(WIND_DIR).applyQuaternion(qInv).multiplyScalar(weight / s);
+        wv.x /= lateralScale; wv.z /= lateralScale;
         m.compose(pos, q, scl);
         for (const im of meshes) { // paired: identical transform on front + side
           im.geometry.attributes.aWindVec.setXYZ(k, wv.x, wv.y, wv.z);
@@ -775,6 +1074,9 @@ export function buildCardFoliage(terminalStems, cards, rng, opts = {}) {
     for (const [meshIndex, im] of meshes.entries()) {
       im.count = k;
       im.userData.windWeights = weights;
+      im.userData.cardRadialPlanes = radialPlanes;
+      im.userData.cardSourceStemCount = list.length;
+      im.userData.cardInstanceCopies = copies;
       im.instanceMatrix.needsUpdate = true;
       im.geometry.attributes.aWindVec.needsUpdate = true;
       im.geometry.attributes.aAnchorPos.needsUpdate = true;

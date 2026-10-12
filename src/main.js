@@ -11,9 +11,19 @@ import { buildTerrainArrays, buildTerrainMaterial } from './core/terrain-materia
 import { buildVolumetricClouds } from './core/clouds.js';
 import { bakeImpostor, disposeBillboard, assembleBillboardFromRawBake } from './core/impostor.js';
 import { serializeSource } from './core/bake-transfer.js';
-import { bakeBranchCards, bakeRosetteCards, disposeBranchCards, forestCardMaterial } from './core/branch-cards.js';
+import {
+  BRANCH_CARD_BAKE_REVISION,
+  BRANCH_CARD_CROWN_UNDERLAY_DEFAULTS,
+  bakeBranchCards, bakeRosetteCards,
+  ensureBranchCardCacheEntryAtomic,
+  disposeBranchCards,
+  forestCardMaterial,
+  planBranchCardCrownUnderlay,
+} from './core/branch-cards.js';
+
 import { buildRocks } from './core/rocks.js';
 import { buildFallenLimbs } from './core/fallen-limbs.js';
+import { crownUnderlayVisible, updateCrownUnderlays } from './core/crown-underlay.js';
 import { buildGrass } from './core/grass.js';
 import { buildScrub } from './core/scrub.js';
 import { windStrength, windSpeed, sunDirectionUniform, WIND_DIR } from './core/wind.js';
@@ -670,8 +680,10 @@ async function main() {
     if (!shaped.foliage || (shaped.foliage.leavesPerBranch ?? 1) <= 0) return null;
     // Mobile bakes EXTRA whole-limb card sets (its LOD3/LOD4 collapse limbs into
     // cards), so the toggle keys its own cache entry.
+    const crownUnderlayPlan = planBranchCardCrownUnderlay(shaped.foliage, 1);
     const bakeShape = JSON.stringify({ params: shaped.params, foliage: shaped.foliage, guideLevel: shaped.guideLevel ?? null, terminalStemsAreGuides: !!shaped.terminalStemsAreGuides });
-    const key = `${species.name}|${bakeShape}|${optState.cardRes}|${optState.cardVariants}|${optState.mobileTarget ? 'm' : 'd'}`;
+    const key = `${species.name}|${bakeShape}|${optState.cardRes}|${optState.cardVariants}|${optState.mobileTarget ? 'm' : 'd'}|b${BRANCH_CARD_BAKE_REVISION}`;
+
     let cards = cardCache.get(key);
     if (cards) return cards;
     const assets = assetCache.get(species.name);
@@ -691,44 +703,58 @@ async function main() {
         crossViews: !!shaped.crossedLod2Cards,
         noFlutter: !!shaped.crossedLod2Cards,
       }];
+    if (crownUnderlayPlan.enabled) {
+      // One foliage-only whole-crown atlas supplies continuous interior mass
+      // behind every card LOD. Preserve subtree layout and cap multi-root cost.
+      jobs.push({
+        key: '0:underlay',
+        level: 0,
+        foliageOnly: true,
+        preserveFoliageLayout: true,
+        maxRoots: BRANCH_CARD_CROWN_UNDERLAY_DEFAULTS.maxRootCards,
+        radialPlanes: BRANCH_CARD_CROWN_UNDERLAY_DEFAULTS.radialPlanes,
+        instanceCapacity: BRANCH_CARD_CROWN_UNDERLAY_DEFAULTS.maxRootCards,
+        variants: 1,
+        // The layer carries low-frequency interior mass; detailed limb cards
+        // remain on top, so half resolution (floor 256) avoids atlas bloat.
+        size: Math.max(256, Math.round(optState.cardRes / 2)),
+        noFlutter: true,
+      });
+    }
+
     baking = true; // the bake re-targets the renderer — pause the main loop
-    const byLevel = new Map();
     try {
-      for (const job of jobs) {
-        const jobKey = `${job.level}:${job.foliageOnly ? 'fol' : 'full'}`;
-        if (byLevel.has(jobKey)) continue; // clamped levels can collide on tiny trees
-        const set = await bakeBranchCards(renderer, shaped, assets, {
-          size: optState.cardRes, variants: optState.cardVariants,
+      cards = await ensureBranchCardCacheEntryAtomic(
+        cardCache,
+        key,
+        jobs,
+        (job) => bakeBranchCards(renderer, shaped, assets, {
+          size: job.size ?? optState.cardRes,
+          variants: job.variants ?? optState.cardVariants,
           cardLevel: job.level, foliageOnly: job.foliageOnly,
-          // Limb-level sets place as crossed pairs — no flutter (it tears the
-          // pair), and bake a REAL side view so the two cards agree at the seam
-          // (single-view twins showed gaps where branches cross the other plane).
-          noFlutter: job.noFlutter ?? job.level < maxLevel,
+          preserveFoliageLayout: job.preserveFoliageLayout,
+          maxRoots: job.maxRoots,
+          radialPlanes: job.radialPlanes,
+          instanceCapacity: job.instanceCapacity,
+          // Limb-level sets place as crossed pairs — no flutter (it tears the pair).
           crossViews: job.crossViews ?? job.level < maxLevel,
           gravityAligned: !!job.gravityAligned,
-        });
-        if (set) byLevel.set(jobKey, set);
-      }
+          noFlutter: job.noFlutter ?? job.level < maxLevel,
+        }),
+        (byLevel) => {
+          const near = byLevel.get(`${maxLevel}:fol`) ?? byLevel.get(`${maxLevel}:full`);
+          if (!near) return null;
+          return { byLevel, variants: near.variants, centerUniform: near.centerUniform };
+        },
+      );
+
     } catch (e) {
       console.error('[SeedThree] branch card bake failed:', e);
+      return null; // completed local sets were disposed; leave cardCache retryable
     } finally {
       baking = false;
     }
-    // A partial mobile bake is unsafe: per-level lookup fallbacks can make the
-    // facade and a byLevel entry refer to the same geometry through different
-    // wrapper identities, defeating repeat-placement clone tracking. Require
-    // every exact requested set; otherwise dispose what succeeded and use the
-    // renderer-free cluster fallback for the whole ladder.
-    const expectedKeys = new Set(jobs.map((job) => `${job.level}:${job.foliageOnly ? 'fol' : 'full'}`));
-    if ([...expectedKeys].some((jobKey) => !byLevel.has(jobKey))) {
-      if (byLevel.size) disposeBranchCards({ byLevel });
-      return null;
-    }
-    const near = byLevel.get(`${maxLevel}:fol`);
-    // Facade: byLevel drives the LOD builder; variants/centerUniform alias the
-    // near per-twig set for the forest rebinner + billboard bake (back-compat).
-    cards = { byLevel, variants: near.variants, centerUniform: near.centerUniform };
-    cardCache.set(key, cards);
+
     if (cardCache.size > 6) { // keep VRAM bounded when params churn
       const [oldKey, old] = cardCache.entries().next().value;
       if (oldKey !== key) { cardCache.delete(oldKey); disposeBranchCards(old); }
@@ -1209,6 +1235,7 @@ async function main() {
           im.receiveShadow = cardsMesh.receiveShadow;
           im.frustumCulled = false;
           im.userData.src = cardsMesh;
+          im.userData.crownUnderlayBounds = cardsMesh.userData.crownUnderlayBounds?.clone() ?? null;
           im.userData.k = k;
           // FREEZE the hero's card transforms at grove-build time. The hero mesh is
           // REUSED in place on edits (its instanceMatrix is rewritten), so reading it
@@ -1302,6 +1329,11 @@ async function main() {
       const apos = im.geometry.attributes.aAnchorPos;
       let w = 0;
       for (const s of near) {
+        const underlayBounds = im.userData.crownUnderlayBounds;
+        if (underlayBounds) {
+          _binP.copy(underlayBounds.center).applyMatrix4(s.mtx);
+          if (!crownUnderlayVisible(camera.position, _binP, underlayBounds.radius * s.s)) continue;
+        }
         for (let j = 0; j < k; j++) {
           if (srcMatrices) _binM.fromArray(srcMatrices, j * 16); // FROZEN snapshot, never the live hero
           else src.getMatrixAt(j, _binM);
@@ -1492,6 +1524,7 @@ async function main() {
     }
     controls.update();
     rebinForest(); // per-instance forest LOD follows the camera (throttled)
+    if (currentTree) updateCrownUnderlays(currentTree, camera);
     // LOD selection is driven HERE from the view camera, never by the renderer
     // (autoUpdate off): the shadow pass would otherwise re-pick the level from
     // the SUN's camera ~100m out, casting a low-LOD shadow under a LOD0 tree.

@@ -18,6 +18,8 @@ export const americanBeech = {
     mode: 'leaves', clustersPerBranch: 3, clusterSize: 1.3, clusterSizeVar: 0.3, clusterQuads: 2,
     tint: 0xd6e6b0, leavesPerBranch: 5, size: 0.40, sizeVar: 0.20,
     startFrac: 0.10, downAngle: 54, bend: 0,
+    cardCoverage: 1.5, cardRadialPlanes: 2, cardCrownUnderlay: true, cardCrownUnderlayLateralScale: 1.35,
+
     trunkClearRadius: 0.7, // keep leaves off the trunk column (height-tapered)
   },
   // American beech (Fagus grandifolia): a low-branched, wide-spreading crown built

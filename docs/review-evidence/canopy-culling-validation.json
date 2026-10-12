@@ -1,0 +1,196 @@
+{
+  "base": "cf2eaad39d9b7355ed086aca2a95fb785e539242",
+  "wind": 0,
+  "postProcessing": false,
+  "results": [
+    {
+      "key": "whiteOak",
+      "before": [
+        {
+          "name": "LOD0",
+          "triangles": 56208
+        },
+        {
+          "name": "LOD1",
+          "triangles": 28104
+        },
+        {
+          "name": "LOD2",
+          "triangles": 8108
+        }
+      ],
+      "after": [
+        {
+          "name": "LOD0",
+          "triangles": 56208,
+          "underlay": 0
+        },
+        {
+          "name": "LOD1",
+          "triangles": 28104,
+          "underlay": 0
+        },
+        {
+          "name": "LOD2",
+          "triangles": 8242,
+          "underlay": 1
+        }
+      ],
+      "Beforeside": {
+        "triangles": 8109,
+        "draws": 3,
+        "bounds": [
+          12.473102335522054,
+          13.817977637052536,
+          17.101290702819824
+        ],
+        "underlaysVisible": 0
+      },
+      "Afterside": {
+        "triangles": 8243,
+        "draws": 4,
+        "bounds": [
+          24.520805457395838,
+          22.17835628802535,
+          32.348360004334964
+        ],
+        "underlaysVisible": 1
+      },
+      "Beforetop": {
+        "triangles": 8109,
+        "draws": 3,
+        "bounds": [
+          12.473102335522054,
+          13.817977637052536,
+          17.101290702819824
+        ],
+        "underlaysVisible": 0
+      },
+      "Aftertop": {
+        "triangles": 8243,
+        "draws": 4,
+        "bounds": [
+          24.520805457395838,
+          22.17835628802535,
+          32.348360004334964
+        ],
+        "underlaysVisible": 1
+      },
+      "Beforegrove": {
+        "triangles": 8109,
+        "draws": 3,
+        "bounds": [
+          12.473102335522054,
+          13.817977637052536,
+          17.101290702819824
+        ],
+        "underlaysVisible": 0
+      },
+      "Aftergrove": {
+        "triangles": 8235,
+        "draws": 4,
+        "bounds": [
+          24.520805457395838,
+          22.17835628802535,
+          32.348360004334964
+        ],
+        "underlaysVisible": 0
+      }
+    },
+    {
+      "key": "douglasFir",
+      "before": [
+        {
+          "name": "LOD0",
+          "triangles": 45264
+        },
+        {
+          "name": "LOD1",
+          "triangles": 27124
+        },
+        {
+          "name": "LOD2",
+          "triangles": 6894
+        }
+      ],
+      "after": [
+        {
+          "name": "LOD0",
+          "triangles": 45264,
+          "underlay": 0
+        },
+        {
+          "name": "LOD1",
+          "triangles": 27124,
+          "underlay": 0
+        },
+        {
+          "name": "LOD2",
+          "triangles": 6898,
+          "underlay": 1
+        }
+      ],
+      "Beforeside": {
+        "triangles": 6895,
+        "draws": 3,
+        "bounds": [
+          24.80235004425049,
+          38.4165112208552,
+          22.490160942077637
+        ],
+        "underlaysVisible": 0
+      },
+      "Afterside": {
+        "triangles": 6899,
+        "draws": 4,
+        "bounds": [
+          34.28565542714078,
+          38.705685771512705,
+          34.90341595775348
+        ],
+        "underlaysVisible": 1
+      },
+      "Beforetop": {
+        "triangles": 6895,
+        "draws": 3,
+        "bounds": [
+          24.80235004425049,
+          38.4165112208552,
+          22.490160942077637
+        ],
+        "underlaysVisible": 0
+      },
+      "Aftertop": {
+        "triangles": 6899,
+        "draws": 4,
+        "bounds": [
+          34.28565542714078,
+          38.705685771512705,
+          34.90341595775348
+        ],
+        "underlaysVisible": 1
+      },
+      "Beforegrove": {
+        "triangles": 6895,
+        "draws": 3,
+        "bounds": [
+          24.80235004425049,
+          38.4165112208552,
+          22.490160942077637
+        ],
+        "underlaysVisible": 0
+      },
+      "Aftergrove": {
+        "triangles": 6895,
+        "draws": 4,
+        "bounds": [
+          34.28565542714078,
+          38.705685771512705,
+          34.90341595775348
+        ],
+        "underlaysVisible": 0
+      }
+    }
+  ],
+  "errors": []
+}

@@ -16,6 +16,9 @@ export const douglasFir = {
   foliage: {
     mode: 'leaves', clustersPerBranch: 3, clusterSize: 1.1, clusterSizeVar: 0.3, clusterQuads: 2,
     tint: 0xc6d2b4, leavesPerBranch: 10, size: 0.6, downAngle: 65, bend: 0, startFrac: 0.15,
+    // One bounded crossed whole-crown card fills the strategic-view interior;
+    // lateral-only growth overlaps neighbours without adding trees or cards.
+    cardCrownUnderlay: true, cardCrownUnderlayLateralScale: 1.35,
   },
   params: {
     scale: 34, scaleV: 3, levels: 3, ratio: 0.02, ratioPower: 1.4,

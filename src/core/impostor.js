@@ -68,7 +68,7 @@ function dilate(data, w, h, passes) {
 // quad in the top half) instead of guessing from content — a content heuristic
 // misfires on bottom-heavy bakes like drooping branch cards.
 let readbackFlipped = null;
-async function probeReadbackRowOrder(renderer) {
+async function probeReadbackRowOrder(renderer, opts = {}) {
   if (readbackFlipped !== null) return readbackFlipped;
   const scene = new Scene();
   const quad = new Mesh(new PlaneGeometry(2, 1), new MeshBasicMaterial({ color: 0xffffff }));
@@ -81,14 +81,20 @@ async function probeReadbackRowOrder(renderer) {
   const prevAlpha = renderer.getClearAlpha();
   renderer.setClearColor(0x000000, 0);
   const rt = new RenderTarget(8, 8);
-  renderer.setRenderTarget(rt);
-  await renderer.renderAsync(scene, cam);
-  const px = await renderer.readRenderTargetPixelsAsync(rt, 0, 0, 8, 8);
-  renderer.setRenderTarget(prevRT);
-  renderer.setClearColor(prevColor, prevAlpha);
-  rt.dispose();
-  quad.geometry.dispose();
-  quad.material.dispose();
+  let px;
+  opts.onRendererBusyChange?.(true);
+  try {
+    renderer.setRenderTarget(rt);
+    await renderer.renderAsync(scene, cam);
+    px = await renderer.readRenderTargetPixelsAsync(rt, 0, 0, 8, 8);
+  } finally {
+    renderer.setRenderTarget(prevRT);
+    renderer.setClearColor(prevColor, prevAlpha);
+    opts.onRendererBusyChange?.(false);
+    rt.dispose();
+    quad.geometry.dispose();
+    quad.material.dispose();
+  }
   readbackFlipped = px[3] < 128; // buffer row 0 transparent → bottom-first → flip
   return readbackFlipped;
 }
@@ -267,7 +273,7 @@ function makeCardMaterial(t, cardH, transmit = TRANSMIT) {
  */
 export async function bakeGroupToTextures(renderer, sourceRoot, views, opts = {}) {
   const size = opts.size ?? 1024;
-  const flip = await probeReadbackRowOrder(renderer);
+  const flip = await probeReadbackRowOrder(renderer, opts);
 
   const scene = new Scene();
   scene.add(sourceRoot);
@@ -309,19 +315,44 @@ export async function bakeGroupToTextures(renderer, sourceRoot, views, opts = {}
   try {
     for (const view of views) {
       const channels = {};
+      const readbacks = [];
       for (const ch of ['albedo', 'normal', 'rough', 'trans']) {
         setChannel(ch);
-        renderer.setRenderTarget(rt);
-        await renderer.renderAsync(scene, view.camera);
-        const pixels = await renderer.readRenderTargetPixelsAsync(rt, 0, 0, size, size);
-        channels[ch] = opts.rawPixels
-          ? { data: processPixels(pixels, size, opts.dilate ?? 12, ch === 'albedo', flip), size, srgb: ch === 'albedo' }
-          : pixelsToTexture(pixels, size, opts.dilate ?? 12, ch === 'albedo', flip);
+        let pixelsPromise;
+        opts.onRendererBusyChange?.(true);
+        try {
+          renderer.setClearColor(0x000000, 0);
+          windStrength.value = 0;
+          renderer.setRenderTarget(rt);
+          await renderer.renderAsync(scene, view.camera);
+          // WebGPU submits the texture-to-buffer copy synchronously before the
+          // returned promise waits on mapAsync. Retain that promise and submit
+          // the next channel immediately: queue order still guarantees each
+          // copy completes before the shared target is rendered again, while
+          // four independent CPU mapping stalls collapse into one wait group.
+          pixelsPromise = renderer.readRenderTargetPixelsAsync(rt, 0, 0, size, size);
+        } finally {
+          // The normal frame renderer gets its complete state back while this
+          // baker yields. The next capture reinstates the offscreen state.
+          renderer.setRenderTarget(prevRT);
+          renderer.setClearColor(prevColor, prevAlpha);
+          windStrength.value = prevWind;
+          opts.onRendererBusyChange?.(false);
+        }
+        readbacks.push({ ch, pixelsPromise });
         opts.onProgress?.(++step, total);
         // Hand a frame back to the main loop between bakes so the engine never
         // freezes and the progress readout can repaint (the main loop re-targets
         // to the screen; we re-set our RT before the next bake render).
         if (opts.yield) await opts.yield();
+      }
+      const pixelsByChannel = await Promise.all(readbacks.map(({ pixelsPromise }) => pixelsPromise));
+      for (let index = 0; index < readbacks.length; index++) {
+        const ch = readbacks[index].ch;
+        const pixels = pixelsByChannel[index];
+        channels[ch] = opts.rawPixels
+          ? { data: processPixels(pixels, size, opts.dilate ?? 12, ch === 'albedo', flip), size, srgb: ch === 'albedo' }
+          : pixelsToTexture(pixels, size, opts.dilate ?? 12, ch === 'albedo', flip);
       }
       out[view.name] = channels;
     }
@@ -331,6 +362,7 @@ export async function bakeGroupToTextures(renderer, sourceRoot, views, opts = {}
     renderer.setRenderTarget(prevRT);
     renderer.setClearColor(prevColor, prevAlpha);
     windStrength.value = prevWind;
+    opts.onRendererBusyChange?.(false);
     rt.dispose();
     scene.remove(sourceRoot);
   }
@@ -349,6 +381,8 @@ export async function bakeImpostor(renderer, sourceGroup, opts = {}) {
 
   const clone = sourceGroup.clone(true);
   clone.visible = true; // the source level may be LOD-hidden right now
+  // Distance culling is for the live view; distant impostors retain crown mass.
+  clone.traverse(o => { if (o.userData.crownUnderlayBounds) o.visible = true; });
   clone.position.set(0, 0, 0);
 
   const box = new Box3().setFromObject(clone);
