@@ -1,0 +1,16 @@
+schema_version = "1.0.0"
+
+id = "seedthree"
+version = "0.1.0"
+name = "SeedThree"
+tagline = "SeedThree trees: the web app's presets, seeds and dials"
+maintainer = "SkyeShark"
+type = "add-on"
+website = "https://github.com/SkyeShark/SeedThree"
+tags = ["Add Mesh", "Object"]
+blender_version_min = "5.2.0"
+license = ["SPDX:MIT"]
+copyright = ["2026 SkyeShark"]
+
+[permissions]
+files = "Reads tree textures and fruit, writes presets when asked"
