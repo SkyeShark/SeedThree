@@ -471,9 +471,11 @@ def set_wind(strength=None, speed=None):
 
 def set_backlight(mode):
     """How the leaf / frond / spine / card backlight reaches EEVEE, for plants grown from now on:
-    'translucent' (the default: a Translucent BSDF, the JS term x the leaf's Lambert factor) or
-    'glow' (the JS term itself, orientation-free, through Shader to RGB: the crown's silhouette
-    glows backlit as in the app). See bl/materials.py."""
+    'translucent' (the default: a Translucent BSDF, the JS term x the leaf's Lambert factor; every
+    lamp reaches it physically) or 'glow' (opt-in: the JS term itself, k x tcol x sun x shadow,
+    orientation-free: the crown glows backlit to its silhouette and front-lit leaves carry the
+    ambient scatter, as in the app; read from the bound sun through Shader to RGB with the world
+    light cancelled, bl/sun.py; a heavy shader: check the first render, see bl/materials.py)."""
     from .bl.materials import set_backlight as _sb
     return _sb(mode)
 

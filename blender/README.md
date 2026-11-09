@@ -63,8 +63,12 @@ As an add-on (Blender 5.2):
      switch distances, budgets, densities, prunes, Bake branch cards, card and
      billboard resolution; Bake billboard, Auto LOD, Frame camera),
      **Environment** (sun azimuth / elevation, scale reference, distance haze,
-     forest trees; Build demo scene, Forest ring), Wind, Light, **Camera**
-     (auto-rotate), **Export** (.glb, PNG), Save & Load.
+     parallax terrain, ambient occlusion, forest trees; Build demo scene, Forest
+     ring; like the app's, these act on the scene at once: the haze swaps to the
+     range fog, the terrain material swaps, the grove rebuilds), Wind, **Light**
+     (Backlight sun, Backlight route: Translucent or Glow (the app), Bake light
+     probe), **Camera** (auto-rotate: a keyed orbit of the scene camera around the
+     last plant), **Export** (.glb, PNG), Save & Load.
    - Save writes the app's `seedthree-preset/1` file. Load reads presets from
      the app or from this panel.
 
@@ -169,9 +173,11 @@ The Blender tier has its own checks (`blender --background --factory-startup --p
 - `smoke_build.py`: all 20 species build, every texture resolves, the wind deforms.
 - `test_addon.py`: the panel's dials, Grow / Regrow / Auto regrow, Save / Load,
   the Light folder, the mobile ladder, Preview level, Auto LOD, Frame camera,
-  Export .glb and the forest ring.
+  Export .glb, the forest ring and the live Environment / Camera toggles (Forest
+  trees, Ambient occlusion, Auto-rotate, Parallax terrain).
 - `test_blender_state.py`: fruit regrows after File > New and after a purge;
-  the sun binding follows its lamp (Euler, quaternion, parented) and rebinds;
+  the sun binding follows its lamp (Euler, quaternion, parented) and rebinds,
+  with its Bound flag and Irradiance (colour x strength) outputs;
   the backlight shares the diffuse's normal on a Thickness-0 card; the light
   probe fit; Z-up bounding boxes; `duplicate_tree`; `save_preset` to a folder;
   the cactus noise settings.
@@ -202,7 +208,21 @@ These are reported here for SeedThree main.
   says it does ("no face flip"). three r184's `normalWorld` is face-flipped on a
   DoubleSide material, so the app's front card bakes normals tilted toward the
   front camera and the side card toward the side camera, and the crossed pair
-  lights differently on either side of the crossing (a seam).
+  lights differently on either side of the crossing (a seam). The billboard bake
+  turns the normals of thin cut-out parts (leaves, fronds, spines) away from the
+  plant's centre: their raw sign is only the generator's winding, and the Joshua
+  tree's leaned toward the card's back, so its billboard lit up under a sun
+  behind it. Outward, the leaves seen by a bake camera lean toward it, as the
+  app's do, and the two cards still agree where they cross.
+- (h) The billboard's ambient scatter uses the plant's own transmit colour and
+  scatter floor for the rosette species too: the Joshua tree's and yuccas' fronds
+  (0.10, 0.13, 0.03), the saguaro's spines (0.86, 0.78, 0.42), both at 0.03. The
+  app passes `species.foliage?.transmit`, which those species lack, so their
+  billboards took the broadleaf green (0.42, 0.62, 0.24) at the leaves' 0.16:
+  the blackbrush report's bug, still open for them.
+- (i) The billboard's baked normal detail turns with the card (a rotated plant, a
+  grove slot's yaw) and is mirrored across the card on its back face; the app
+  uses it unturned, in the plant's own frame, from either side.
 - The spines dial no longer mutates the shared species preset.
 
 ## Blender-specific notes
@@ -228,14 +248,40 @@ These are reported here for SeedThree main.
   before dilation.
 - The JS caps rosette cones at 1024 per cone type (a WebGPU buffer size). The
   cap is kept, for parity.
-- Backlight (`bl/sun.py`): the JS's Barré-Brisebois term for leaves, fronds and
-  spines, with each JS material's constants. The view-dependent factor is
-  computed in the node tree against the sun lamp bound to one shared group
-  ("SeedThree Sun"). It feeds a Translucent BSDF on the material's own shading
-  normal, on a card whose Thickness is linked to 0. EEVEE then answers
-  k × thicknessColor × E × max(0, −N·L) × shadow: the JS term times the leaf's
-  Lambert factor. Measured in EEVEE 5.2 on the way there (eidoverse's
-  `blender/tests/trees/backlight_check.py` checks the result to 0.5%):
+- Backlight (`bl/sun.py`, `bl/materials.py`): the JS's Barré-Brisebois term for
+  leaves, fronds, spines and cards, with each JS material's constants. The
+  view-dependent factor k is computed in the node tree against the sun lamp
+  bound to one shared group ("SeedThree Sun"). `api.set_backlight(mode)` picks
+  the route for plants grown from then on (the add-on: Light > Backlight):
+  - `'glow'` (opt-in) is the JS term itself, k × thicknessColor × E ×
+    shadow, with no Lambert factor: the crown glows to its silhouette, and
+    front-lit leaves carry the ambient scatter. It is a heavy shader (each
+    Shader-to-RGB read inlines EEVEE's light loop): in a 12 GB memory-capped
+    Blender holding the whole demo scene the GPU driver ran out of memory
+    linking the leaf and card shaders (leaves missing, cards magenta), so it
+    is not the default; check the first render of a glow shot. The group "SeedThree Sun
+    Direct" reads E × shadow / π through Shader to RGB of four white
+    Translucent BSDFs: one facing the sun, three the sun cannot reach. EEVEE's
+    diffuse world and probe light is an L1 spherical harmonic (affine in the
+    normal), so those three give the sun-facing read's world part exactly and
+    it is subtracted; the glow joins the leaf as emission, so no second
+    diffuse-type closure competes with the leaf's own. The Translucent reads
+    are shadowed from the sun's side of the card, so a card lit from behind
+    does not shadow itself (a Diffuse BSDF read facing the sun would). Other
+    lamps also reach the reads, weighted by their angle to the sun.
+  - `'translucent'` (the default) feeds a Translucent BSDF on the material's own shading
+    normal, on a card whose Thickness is linked to 0. EEVEE then answers
+    k × thicknessColor × E × max(0, −N·L) × shadow: the JS term times the
+    leaf's Lambert factor.
+  - Every leaf, card, frond and spine part carries the app's shadow
+    `normalBias` (0.04 m) as EEVEE's per-object shadow terminator offset, with a
+    geometry offset far above 1 so it applies at every angle
+    (`materials.shadow_bias`). EEVEE's own bias puts the shadow lookup of a
+    card lit from behind at a grazing angle on the card's dark side; the offset
+    moves it toward the sun along the closure's light normal and gives part of
+    that light back (numbers under Not yet ported).
+  Measured in EEVEE 5.2 on the way there (eidoverse's
+  `blender/tests/trees2/glow_silhouette.py` and `blender/tests/trees/backlight_check.py`):
   - A Translucent BSDF on a different normal from the diffuse (−L would have
     made the response orientation-free like the JS) makes EEVEE drop the
     Principled diffuse: the sunlit side goes black.
@@ -243,8 +289,11 @@ These are reported here for SeedThree main.
     slab: a canopy never shadows its own transmission, and the colour acts
     twice (colour²).
   - At Thickness 0, a card lit from behind more than ~45° off its normal is
-    self-shadowed. No shadow filter, ray count, resolution or terminator
-    offset removes it.
+    self-shadowed: EEVEE's transmission bias (`reflect(Ng, L)`) points to the
+    card's dark side there. No shadow filter, ray count or resolution removes
+    it; the object's terminator offset does once its geometry offset is above 1
+    (EEVEE scales it by `saturate(1 − N·L / geometry_offset)`, so at the default
+    0.1 it never reaches a light-facing normal).
   - EEVEE lights the closure with the world too, unoccluded unless a Light
     Probe Volume is baked: `light_probe()` (`bl/probe.py`), about 2 s per tree.
 - The saguaro damage mask is the JS's `mx_fractal_noise_float` exactly: Blender's
@@ -256,12 +305,63 @@ These are reported here for SeedThree main.
 - The app's 4096² shadow frustum ends at 74 m, so its grove cards fade in an
   analytic sun occlusion beyond it; EEVEE's shadows reach every distance, so the
   grove here is shadowed for real.
+- The billboard has no specular. Its smooth dome normal catches a sun behind the
+  tree as one grazing glint over the whole card, and the card receives no
+  shadow, so nothing dims it: on the white oak from 75 m under a 25° sun behind
+  it, the specular was 85 % of the billboard's light and the grove rendered
+  white, 5.2 × the tree's own luminance in linear light, 2.4 × on screen (the
+  tree's leaves glint one by one and mostly shadow each other). The app keeps
+  the same GGX lobe on the same normal.
+  The billboard's ambient scatter follows the plant's backlight route, so the
+  switch keeps the leaves' brightness: a Translucent BSDF on the card's normal in
+  the default route (as the leaves have it), the JS term exactly (the bound sun's
+  unshadowed light, the 'SeedThree Sun' group's Irradiance, as emission) in the
+  glow route. eidoverse's `blender/tests/trees2/billboard_light_match.py`
+  measures the billboard against LOD0 under a sun in front, beside and behind.
+- The demo scene's tone map: three's `ACESFilmicToneMapping` scales by
+  exposure / 0.6 before its curve; AgX with the 'High Contrast' look at
+  log2(exposure) + 0.23 stops gives the same display values on a neutral ramp
+  (mean difference 0.008, measured through Blender's OCIO against three r184's
+  formula at exposures 1.3, 1.05 and 1.0; `scene/tonemap.py`). AgX's base look at
+  log2(exposure) rendered the app's mid-tones darker and its shadows lifted.
+- The app's sun colour is `Color.setHSL`, which in three r184 takes its values in
+  the linear working space: the HSL triple is the linear colour (no sRGB decode).
+- The demo scene's ring haze is a compositor pass over the Position pass. The
+  film renders transparent and the sky returns from the Environment pass, so
+  the haze weighs only the geometry's share of a pixel (its alpha). Each pixel
+  takes the factor of its own position, as the app fogs per fragment; only
+  edge pixels with no position of their own (the Position pass is not
+  antialiased: the image blends the hazed terrain rim into the sky while the
+  pass holds the sky's empty position) take their 2 px neighbourhood's factor,
+  so neither a dark rim line nor haze-coloured blocks on leaves in front of far
+  hills appear. With the haze off (the app's Distance fog toggle, and while a
+  preview level is forced) the pass falls back to the app's classic range fog,
+  `smoothstep(near, far, view depth)` toward the sky's fog colour (95-300 m,
+  desert 55-230 m), from the Depth pass; `set_fog_on(scene, False)` drops both.
+  The demo's sky needs its compositor. The parallax terrain (SPOM, `scene/spom.py`) is the app's
+  optional toggle, unrolled into shader nodes (48 march steps, 12 shadow
+  steps).
+- The soundscape's wind bed strip carries √2: Blender pans a mono strip
+  equal-power (−3 dB per channel at the centre), the app's unpanned bed plays
+  at full level on both channels. The birds' exponential fades are keyed on
+  every frame.
 
 ## Not yet ported
 
-- The JS backlight's orientation-free response (EEVEE keeps one diffuse-type
-  closure per normal; see the backlight note above).
-- The app's optional parallax-occlusion terrain (SPOM: `terrain-material.js`,
-  `parallax-occlusion.js`): the demo terrain is the app's default splat
-  material.
-- The GitHub fallback when no checkout is found.
+- The app's backlight look by default: the default route keeps the leaf's
+  Lambert factor; the app's own term is the opt-in `'glow'` route (see the
+  backlight notes: its shader failed to link once under a memory cap).
+- A card lit from behind more than ~45° off its normal keeps only part of its
+  backlight in either route. With the app's normalBias (0.04 m) and 2 shadow
+  rays / 8 steps, 54° off keeps 96 % (translucent) / 71 % (glow), 72° off
+  14 % / 0 %, 85° off 24 % / 76 %; 0.1 m keeps more but flattens close-up
+  leaf-on-leaf shadows. In the glow route the shadow read is pushed along the
+  sun's direction, nearly parallel to such a card.
+- The GitHub fallback when no checkout is found (eidoverse's JS bridge imports
+  the API from GitHub; the Blender edition needs a local checkout of this
+  branch).
+- The demo's volumetric clouds as the app shows them: the cloud volumes carry
+  the app's emission + absorption recipe (a Set Material in their Geometry Nodes
+  group: EEVEE drew them with its default grey volume shader without it), but
+  EEVEE 5.2 brings them to the frame at a few percent of their expected
+  strength, so they read as faint smudges, not the app's white clouds.

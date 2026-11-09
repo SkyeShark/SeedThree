@@ -225,6 +225,10 @@ def export_material(src, proxy=None):
         bsdf.inputs['Roughness'].default_value = 1.0
         return m
     im = _images(src)
+    if src.get('st_billboard'):
+        # impostor.js's card material has no normalMap: its baked normal is a world-space detail
+        # read by the live shader only (the bent corner normals carry the shape in the file)
+        im['normal'] = None
     alb = None
     if im['albedo'] is not None:
         alb = nt.nodes.new('ShaderNodeTexImage')

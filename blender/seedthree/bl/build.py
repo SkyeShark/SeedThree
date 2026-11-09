@@ -251,7 +251,10 @@ def create_tree(species='whiteOak', seed=1, controls=None, lod=None, level='LOD0
             me = meshes.fruit_mesh(tag + ' fruit', fr, template, tree['assets']['fruitOffset'])
             objs.append(_child(tag + ' fruit', me, root, col, fmat, sink, wind))
         slug = shaped['name'].replace(' ', '_')
+        from .export import role_of
         for o in objs:
+            if role_of(o) in ('foliage', 'cards', 'fronds', 'spines'):
+                materials.shadow_bias(o)   # the app's shadow normalBias (grazing backlit cards)
             o['seedthree_lod'] = lv['name']
             o['seedthree_export_level'] = '%s_%s' % (slug, lv['name'])
             if lv.get('appOnly'):

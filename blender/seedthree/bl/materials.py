@@ -35,7 +35,7 @@ import os
 import bpy
 
 from .. import api as _api   # _api.ASSETS_DIR is read at call time (the add-on preference can move it)
-from .sun import sun_group
+from .sun import sun_group, sun_direct_group
 
 # three's MeshSSSNodeMaterial constants per JS material: (distortion, ambient, power, scale)
 BB_LEAVES = (0.3, 0.16, 6.0, 3.0)      # leaf-cards.js makeFoliageMaterial
@@ -46,11 +46,17 @@ BB_SPINES = (0.35, 0.03, 5.0, 2.5)     # cactus-spines.js
 # closer than this are skipped (like three's shadow bias), grazing cards keep more glow, and
 # the colour is fed as its square root (EEVEE answers colour^2 for a slab).
 SLAB = 0.0
-# How the backlight reaches EEVEE (set_backlight): 'translucent' (a Translucent BSDF on the
-# shading normal: the JS term x the leaf's Lambert factor max(0, -N.L)) or 'glow' (the JS term
-# itself, orientation-free: the sun's shadowed light read through Shader to RGB, added as
-# emission; the silhouette keeps glowing). Materials are keyed by the mode.
-BACKLIGHT = 'translucent'
+# How the backlight reaches EEVEE (set_backlight): 'translucent' (the default: a Translucent
+# BSDF on the shading normal: the JS term x the leaf's Lambert factor max(0, -N.L); every lamp
+# reaches it physically) or 'glow' (the JS term itself, orientation-free: the bound sun's
+# shadowed direct light read through Shader to RGB by 'SeedThree Sun Direct' (bl/sun.py),
+# added as emission; the silhouette keeps glowing and front-lit leaves carry the ambient
+# scatter). 'glow' is opt-in: its four Shader-to-RGB reads inline EEVEE's light loop four
+# times, and in the trees2 batch (a 12 GB memory-capped process holding the demo scene) the
+# GPU driver ran out of memory linking the leaf and card shaders: EEVEE then drew the leaves
+# missing and the cards magenta. Materials are keyed by the mode.
+BACKLIGHT_DEFAULT = 'translucent'
+BACKLIGHT = BACKLIGHT_DEFAULT          # the current route (set_backlight)
 BACKLIGHT_MODES = ('translucent', 'glow')
 
 
@@ -61,6 +67,25 @@ def set_backlight(mode):
         raise ValueError('[seedthree] backlight mode %r: one of %s' % (mode, ', '.join(BACKLIGHT_MODES)))
     BACKLIGHT = mode
     return mode
+
+
+# main.js sunLight.shadow.normalBias: the shadow lookup sits 0.04 m off the receiver along its
+# normal. EEVEE's per-object shadow terminator offset does the same along each closure's light
+# normal (eevee_shadow_terminator_offset: P += N x normal_offset x saturate(1 - N.L /
+# geometry_offset); a geometry offset far above 1 makes it apply at every angle). On the thin
+# translucent parts it is what keeps a card lit from behind at a grazing angle (more than ~45
+# degrees off its normal) from shadowing itself: EEVEE's own bias puts that lookup on the
+# card's dark side.
+SHADOW_NORMAL_BIAS = 0.04
+_TERMINATOR_ANY_ANGLE = 100.0
+
+
+def shadow_bias(ob, bias=SHADOW_NORMAL_BIAS):
+    """Give a plant part the app's shadow normal bias (EEVEE's shadow terminator offset)."""
+    if hasattr(ob, 'shadow_terminator_normal_offset'):
+        ob.shadow_terminator_normal_offset = float(bias)
+        ob.shadow_terminator_geometry_offset = _TERMINATOR_ANY_ANGLE if bias > 0 else 0.1
+    return ob
 
 
 def srgb_to_linear_hex(h):
@@ -96,7 +121,7 @@ def _maps(sub, file, extra=()):
     return out
 
 
-_VERSION = 3   # bump when a node tree changes, so a saved file's older material is not reused
+_VERSION = 4   # bump when a node tree changes, so a saved file's older material is not reused
 
 
 def _key(*parts):
@@ -231,17 +256,15 @@ class _G:
         if amount is not None:
             k = self.math('MULTIPLY', k, amount)
         if BACKLIGHT == 'glow':
-            # The JS term has no Lambert factor: glow = k x tcol x E x shadow. A white Diffuse BSDF
-            # whose normal points AT the sun is lit E x shadow / pi (plus the sky around the sun);
-            # Shader to RGB reads that light and the glow joins as emission, so no second
-            # diffuse-type closure competes with the leaf's own (which made EEVEE drop it).
-            dif = self.node('ShaderNodeBsdfDiffuse')
-            dif.inputs['Color'].default_value = (1.0, 1.0, 1.0, 1.0)
-            self.link(L, dif.inputs['Normal'])
-            s2r = self.node('ShaderNodeShaderToRGB')
-            self.link(dif.outputs[0], s2r.inputs[0])
+            # The JS term has no Lambert factor: glow = k x tcol x E x shadow, the sun's direct
+            # light only. 'SeedThree Sun Direct' (bl/sun.py) reads E x shadow / pi through
+            # Shader to RGB (the world / probe light cancelled out) and the glow joins as
+            # emission, so no second diffuse-type closure competes with the leaf's own (which
+            # made EEVEE drop it).
+            d = self.node('ShaderNodeGroup')
+            d.node_tree = sun_direct_group()
             col = self.vmath('SCALE', tuple(transmit), None, scale=k)
-            glow = self.vmath('MULTIPLY', s2r.outputs['Color'], col)
+            glow = self.vmath('MULTIPLY', d.outputs[0], col)
             em = self.node('ShaderNodeEmission')
             em.inputs['Strength'].default_value = 1.0
             self.link(glow, em.inputs['Color'])
@@ -587,13 +610,54 @@ def card_material(name, imgs, transmit=None, key=None):
 BB_BILLBOARD = (0.0, 0.16, 6.0, 0.0)   # impostor.js: distortion 0, ambient 0.16, power 6, scale 0 (no backlit bloom)
 
 
-def billboard_material(name, imgs, card_h, transmit=None, key=None):
+def _billboard_detail(g, img, view):
+    """The billboard's baked detail normal (the plant's frame), turned with the card into the
+    world (a rotated plant or a grove slot's yaw: three's card uses it unturned) and, seen
+    from the card's back, mirrored across the card plane (the leaves seen from behind lean
+    toward that viewer as the front ones lean toward the front). Keeps the decoded length,
+    which weighs it against the dome as in the JS."""
+    v0 = _decode_baked_normal(g, img)
+    v = v0
+    if view in ('front', 'side'):
+        # the card plane's normal in the card's own frame (bl/cards.py builds the front card
+        # in XZ, the side card in YZ)
+        axis = (0.0, 1.0, 0.0) if view == 'front' else (1.0, 0.0, 0.0)
+        geo = g.node('ShaderNodeNewGeometry')
+        along = g.vmath('DOT_PRODUCT', v0, axis)
+        k = g.math('MULTIPLY', g.math('MULTIPLY', along, geo.outputs['Backfacing']), -2.0)
+        v = g.vmath('MULTIPLY_ADD', axis)                  # axis x (-2 (v . axis) backfacing) + v
+        g.link(k, v.node.inputs[1])
+        g.link(v0, v.node.inputs[2])
+    length = g.vmath('LENGTH', v0)
+    vt = g.node('ShaderNodeVectorTransform', vector_type='VECTOR', convert_from='OBJECT', convert_to='WORLD')
+    g.link(v, vt.inputs[0])
+    return g.vmath('SCALE', g.vmath('NORMALIZE', vt.outputs[0]), None, scale=length)
+
+
+def billboard_material(name, imgs, card_h, transmit=None, key=None, view=None, ambient=None):
     """impostor.js makeCardMaterial: baked albedo / roughness, alpha test 0.35, the canopy-dome
     normal around the card's own origin with the sphere centre dropped 0.55 x card height
     (no radial points down), +0.45 up, then + 0.55 x the baked world-normal detail; the
     flat ambient scatter (0.16 x 0.7 x translucency x the species transmit), no directional
-    backlight."""
+    backlight. The scatter follows the plant's backlight route (set_backlight), so the
+    switch to the billboard keeps the leaves' brightness: 'translucent' a Translucent BSDF
+    on the card's normal (x max(0, -N.L), as the leaves have it), 'glow' the JS term
+    exactly (x the sun's unshadowed light on every side: the card receives no shadow).
+    The baked detail turns with the card (a rotated plant, a grove slot's yaw) and is
+    mirrored across the card plane on its back face (_billboard_detail); view: 'front' or
+    'side', the card it shades. ambient: the scatter floor (impostor.js 0.16, the leaves';
+    the rosette plants pass their fronds' / spines' 0.03).
+
+    No specular. The card's smooth dome normal catches a sun behind the tree as one
+    grazing glint over the whole card, and the card never receives a shadow (cast-only),
+    so nothing dims it: measured on the white oak 1737 from 75 m with a 25-degree sun
+    behind it, the specular was 85 % of the billboard's light and the pair rendered white,
+    5.2x the tree's own luminance in linear light, 2.4x on screen (LOD0's leaves glint one
+    by one and mostly shadow each other). The app drops the impostor's backlit term for
+    the same reason (its glowing patches); it keeps the specular, the same GGX lobe on
+    the same dome normal."""
     transmit = tuple(transmit or (0.42, 0.62, 0.24))
+    consts = (BB_BILLBOARD[0], BB_BILLBOARD[1] if ambient is None else float(ambient)) + BB_BILLBOARD[2:]
     mat = bpy.data.materials.new(name)
     if key:
         mat['st_key'] = key
@@ -605,18 +669,36 @@ def billboard_material(name, imgs, card_h, transmit=None, key=None):
     keep = g.math('GREATER_THAN', alb.outputs['Alpha'], 0.35)
     g.link(g.channel(g.tex(imgs['rough']).outputs['Color'], 1), bsdf.inputs['Roughness'])
     bsdf.inputs['Metallic'].default_value = 0.0
+    bsdf.inputs['Specular IOR Level'].default_value = 0.0      # no whole-card glint (above)
     geo = g.node('ShaderNodeNewGeometry')
     oi = g.node('ShaderNodeObjectInfo')
     d = g.vmath('SUBTRACT', geo.outputs['Position'], oi.outputs['Location'])
     d = g.vmath('ADD', d, (0.0, 0.0, card_h * 0.55))
     d = g.vmath('ADD', g.vmath('NORMALIZE', d), (0.0, 0.0, 0.45))
     d = g.vmath('NORMALIZE', d)
-    n = g.vmath('MULTIPLY_ADD', _decode_baked_normal(g, imgs['normal']), (0.55, 0.55, 0.55))
+    n = g.vmath('MULTIPLY_ADD', _billboard_detail(g, imgs['normal'], view), (0.55, 0.55, 0.55))
     g.link(d, n.node.inputs[2])
     n = g.vmath('NORMALIZE', n)
     g.link(n, bsdf.inputs['Normal'])
     amount = g.math('MULTIPLY', g.channel(g.tex(imgs['trans']).outputs['Color'], 0), 0.7)
-    tl = g.backlight(transmit, amount, n, BB_BILLBOARD, SLAB)
+    if BACKLIGHT == 'glow':
+        # The flat ambient scatter, exactly: three adds (0 + ambient) x thicknessColor x
+        # lightColor for the sun, and the card receives no shadow, so lightColor is the sun's
+        # colour x strength all over it (the 'SeedThree Sun' group's Irradiance): an emission,
+        # the same front-lit and back-lit, as the glow route gives the plant's own leaves.
+        sun = g.node('ShaderNodeGroup')
+        sun.node_tree = sun_group()
+        tcol = g.vmath('SCALE', tuple(c * consts[1] for c in transmit), None, scale=amount)
+        scatter = g.vmath('MULTIPLY', sun.outputs['Irradiance'], tcol)
+        tl = g.node('ShaderNodeEmission')
+        tl.name = tl.label = 'Ambient scatter'
+        tl.inputs['Strength'].default_value = 1.0
+        g.link(scatter, tl.inputs['Color'])
+        tl = tl.outputs[0]
+    else:
+        # The translucent route, as on the plant's own leaves (x max(0, -N.L)): the switch to
+        # the billboard keeps the leaves' brightness.
+        tl = g.backlight(transmit, amount, n, consts, SLAB)
     add = g.node('ShaderNodeAddShader')
     g.link(bsdf.outputs[0], add.inputs[0])
     g.link(tl, add.inputs[1])
@@ -626,7 +708,8 @@ def billboard_material(name, imgs, card_h, transmit=None, key=None):
     g.link(tr.outputs[0], mix.inputs[1])
     g.link(add.outputs[0], mix.inputs[2])
     g.link(mix.outputs[0], out.inputs['Surface'])
-    _settings(mat, alpha=True, translucent=True, thickness=SLAB)
+    _settings(mat, alpha=True, translucent=BACKLIGHT != 'glow', thickness=SLAB)
+    mat['st_backlight'] = BACKLIGHT
     mat['st_billboard'] = True
     mat['st_transmit'] = list(transmit)
     return mat
@@ -732,3 +815,10 @@ def spine_material(species, controls):
     mat['st_gltf_dt'] = True              # cactus-spines.js userData.gltfDiffuseTransmission
     mat['st_transmit'] = [0.86, 0.78, 0.42]
     return mat
+
+
+# the JS factory names (tree.js, leaf-cards.js), for code written against the app's modules
+make_bark_material = bark_material                  # makeBarkMaterial
+make_thatch_bark_material = thatch_bark_material    # makeThatchBarkMaterial
+make_cactus_bark_material = cactus_bark_material    # makeCactusBarkMaterial
+make_foliage_material = leaf_material               # makeFoliageMaterial

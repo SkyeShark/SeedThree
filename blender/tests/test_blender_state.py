@@ -33,8 +33,8 @@ from seedthree.bl import sun as bsun  # noqa: E402
 fails = []
 
 
-def check(cond, msg):
-    print(('PASS ' if cond else 'FAIL ') + msg)
+def check(cond, msg, detail=''):
+    print(('PASS ' if cond else 'FAIL ') + msg + ((': ' + detail) if detail else ''))
     if not cond:
         fails.append(msg)
 
@@ -107,6 +107,9 @@ def sun_dir():
 
 weak = lamp('weak', 1.0, (0.3, 0.2, 0.1))
 strong = lamp('strong', 4.0, (0.9, -0.4, 2.2))
+from seedthree.bl import materials as bmat  # noqa: E402
+BACKLIGHT_DEFAULT = bmat.BACKLIGHT
+api.set_backlight('translucent')      # the Translucent BSDF route's structure first (glow below)
 t = api.create_tree('whiteOak', 3, wind=False)
 check(t['sun'] == strong and bsun.bound_sun() == strong, 'create_tree bound the strongest sun lamp (%s)' % (t['sun'].name if t['sun'] else None))
 worst = 0.0
@@ -134,6 +137,30 @@ bpy.data.objects.remove(weak, do_unlink=True)
 check(bsun.bound_sun() is None, 'deleting the bound lamp leaves the group unbound')
 t2 = api.create_tree('whiteOak', 4, wind=False)
 check(t2['sun'] == strong, 'the next create_tree rebinds to the remaining sun lamp')
+flag = bpy.data.node_groups[bsun.GROUP].nodes[bsun.BOUND].outputs[0]
+was = flag.default_value
+api.set_sun(None)
+off = flag.default_value
+api.set_sun(strong)
+check(was == 1.0 and off == 0.0 and flag.default_value == 1.0,
+      'the Sun group\'s Bound flag (the glow reads only a bound lamp) follows set_sun: %g, unbound %g, rebound %g' % (
+          was, off, flag.default_value))
+
+
+def sun_irradiance():
+    bpy.context.view_layer.update()
+    dg = bpy.context.evaluated_depsgraph_get()
+    ng = bpy.data.node_groups[bsun.GROUP].evaluated_get(dg)
+    return Vector([s.default_value for s in ng.nodes[bsun.IRRADIANCE].inputs[:3]])
+
+
+strong.data.color = (1.0, 0.8, 0.6)
+strong.data.energy = 3.5
+got = sun_irradiance()
+want = Vector((3.5, 2.8, 2.1))
+check((got - want).length < 1e-5 and bsun.bound_sun() == strong,
+      'the Sun group\'s Irradiance (the billboard\'s ambient scatter) = the bound lamp\'s colour x strength: %s' % (
+          str(tuple(round(c, 4) for c in got)),))
 for part in ('foliage',):
     mat = next(o for o in t['objects']['LOD0'] if o.name.endswith(part)).data.materials[0]
     nodes = mat.node_tree.nodes
@@ -158,6 +185,36 @@ for out_, part in ((sj, 'fronds'), (sg, 'spines')):
     same = (tl.inputs['Normal'].is_linked and pr.inputs['Normal'].is_linked
             and tl.inputs['Normal'].links[0].from_socket == pr.inputs['Normal'].links[0].from_socket)
     check(same, 'the %s backlight shares the Principled\'s normal' % part)
+
+# the glow route: the JS term read through 'SeedThree Sun Direct' as emission beside the Principled
+api.set_backlight('glow')
+tg = api.create_tree('whiteOak', 3, wind=False, location=(60, 0, 0))
+jg = api.create_tree('joshuaTree', 7, wind=False, location=(70, 0, 0))
+sgg = api.create_tree('saguaro', 3, wind=False, location=(80, 0, 0))
+for out_, part in ((tg, 'foliage'), (jg, 'fronds'), (sgg, 'spines')):
+    mat = next(o for o in out_['objects']['LOD0'] if o.name.endswith(part)).data.materials[0]
+    nodes = mat.node_tree.nodes
+    groups = sorted(n.node_tree.name for n in nodes if n.type == 'GROUP')
+    check(bsun.DIRECT_GROUP in groups and any(n.type == 'EMISSION' for n in nodes)
+          and not any(n.type == 'BSDF_TRANSLUCENT' for n in nodes) and any(n.type == 'BSDF_PRINCIPLED' for n in nodes),
+          'glow: the %s material reads %s as emission beside its Principled (no second diffuse-type closure)' % (
+              part, bsun.DIRECT_GROUP), str(groups))
+dg_ = bpy.data.node_groups[bsun.DIRECT_GROUP]
+kinds = [n.type for n in dg_.nodes]
+check(kinds.count('BSDF_TRANSLUCENT') == 4 and kinds.count('SHADERTORGB') == 4,
+      'glow: %s reads the sun through four Shader-to-RGB Translucent BSDFs' % bsun.DIRECT_GROUP,
+      '%d translucent, %d shader-to-RGB' % (kinds.count('BSDF_TRANSLUCENT'), kinds.count('SHADERTORGB')))
+# the app's shadow normalBias on the thin parts (EEVEE's terminator offset at every angle), none on bark
+from seedthree.bl.export import role_of  # noqa: E402
+parts = [o for out_ in (t, sj, sg, tg) for objs in out_['objects'].values() for o in objs]
+thin = [o for o in parts if role_of(o) in ('foliage', 'cards', 'fronds', 'spines')]
+bark = [o for o in parts if role_of(o) == 'bark']
+check(thin and all(abs(o.shadow_terminator_normal_offset - bmat.SHADOW_NORMAL_BIAS) < 1e-6
+                   and o.shadow_terminator_geometry_offset > 1.0 for o in thin)
+      and all(o.shadow_terminator_normal_offset == 0.0 for o in bark),
+      'the shadow normal bias (%.2f m at every angle) on %d leaf / frond / spine parts, none on %d bark parts' % (
+          bmat.SHADOW_NORMAL_BIAS, len(thin), len(bark)))
+api.set_backlight(BACKLIGHT_DEFAULT)
 
 # ---- light probe fit (the bake itself renders on the GPU: the trees render probes bake it) --------
 from seedthree.bl import probe as bprobe  # noqa: E402

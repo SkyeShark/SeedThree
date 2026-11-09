@@ -27,6 +27,9 @@ from .bake import bake_objects_to_textures
 CARD_RES = 512
 CARD_VARIANTS = 3
 BILLBOARD_RES = 1024
+FROND_TRANSMIT = (0.10, 0.13, 0.03)    # yucca-leaves.js frond material
+SPINE_TRANSMIT = (0.86, 0.78, 0.42)    # cactus-spines.js SPINE_TRANSMIT
+ROSETTE_AMBIENT = 0.03                 # both materials' thicknessAmbient
 
 
 def _hash(obj):
@@ -232,11 +235,21 @@ def bake_impostor(tree, size=BILLBOARD_RES, source_level='LOD0', centered='axis'
         temps.append(t)
     label = name or ('ST %s billboard' % shaped['name'])
     try:
-        baked = bake_objects_to_textures(temps, views, size=size, dilate_passes=12, name=label)
+        baked = bake_objects_to_textures(temps, views, size=size, dilate_passes=12, name=label,
+                                         outward_center=(center[0], -center[2], center[1]))
     finally:
         for t in temps:
             bpy.data.objects.remove(t, do_unlink=True)
-    transmit = tuple(transmit or (shaped.get('foliage') or {}).get('transmit') or TRANSMIT)
+    # main.js: the species' own foliage transmit, else the broadleaf green. Rosette and cactus
+    # species have none, and their billboard took the broadleaf green (4.8x the Joshua fronds'
+    # (0.10, 0.13, 0.03)): it scatters the plant's own fronds' / spines' colour instead
+    # (the JS's blackbrush fix, carried to the rosettes).
+    own = (shaped.get('foliage') or {}).get('transmit') if isinstance(shaped.get('foliage'), dict) else None
+    ambient = None                       # impostor.js: 0.16, "matches leaf/card LODs"
+    if own is None and shaped.get('foliageType') == 'rosette':
+        own = SPINE_TRANSMIT if shaped.get('cactus') else FROND_TRANSMIT
+        ambient = ROSETTE_AMBIENT        # the fronds' / spines' own scatter floor
+    transmit = tuple(transmit or own or TRANSMIT)
     geo_levels = [l for l in tree['tree']['levels']]
     slug = shaped['name'].replace(' ', '_')
     grp = bpy.data.objects.new('%s %s' % (root.name, 'BB'), None)
@@ -253,7 +266,8 @@ def bake_impostor(tree, size=BILLBOARD_RES, source_level='LOD0', centered='axis'
     w, h = half_w * 2, half_h * 2
     cz = center[1]
     for i, view in enumerate(('front', 'side')):
-        mat = materials.billboard_material('%s %s' % (label, view), baked[view], h, transmit)
+        mat = materials.billboard_material('%s %s' % (label, view), baked[view], h, transmit, view=view,
+                                           ambient=ambient)
         me = bpy.data.meshes.new('%s %s' % (label, view))
         # PlaneGeometry(w, h) on its own frame; front faces +z (three) = -y (Blender),
         # side faces +x with U running +z -> -z like the side bake camera (three)

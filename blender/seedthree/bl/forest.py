@@ -236,6 +236,8 @@ def make_forest_ring(tree, count=64, seed=None, near_level='LOD2', billboard=Tru
     col.objects.link(ob)
     ng = forest_group('%s grove' % label, near_col, bb_col, bb_dist, half_h, wind, part='near')
     ob.modifiers.new('SeedThree Forest', 'NODES').node_group = ng
+    from .materials import shadow_bias
+    shadow_bias(ob)   # the realized near trees carry cards: the app's shadow normalBias
     ob['seedthree_forest'] = True
     ob['allow_intersect'] = True
     groups = [ng]

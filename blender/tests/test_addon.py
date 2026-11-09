@@ -91,6 +91,23 @@ res = bpy.ops.seedthree.light_probe(bake=False)
 pb = bpy.data.objects.get('SeedThree Light Probe')
 check('FINISHED' in res and pb is not None and pb.data.type == 'VOLUME',
       'Bake light probe fitted a Light Probe Volume around the plants')
+# the Backlight dropdown: the app's glow (default) or the Translucent BSDF route, for the next Grow
+st.species = 'whiteOak'
+got = {}
+for mode in ('translucent', 'glow'):
+    st.backlight = mode
+    bpy.ops.seedthree.grow()
+    r = bpy.data.objects.get(st.last_root)
+    fol = next(o for o in r.children if o.name.endswith('foliage'))
+    nodes = fol.data.materials[0].node_tree.nodes
+    got[mode] = (any(n.type == 'BSDF_TRANSLUCENT' for n in nodes),
+                 any(n.type == 'GROUP' and n.node_tree.name == bsun.DIRECT_GROUP for n in nodes))
+from seedthree.bl import materials as bmat  # noqa: E402
+check(st.bl_rna.properties['backlight'].default == bmat.BACKLIGHT_DEFAULT and got == {'translucent': (True, False), 'glow': (False, True)},
+      'the Backlight dropdown (default %s, the library\'s) picks the route of the next Grow: %s' % (
+          bmat.BACKLIGHT_DEFAULT, got))
+st.backlight = bmat.BACKLIGHT_DEFAULT
+bmat.set_backlight(bmat.BACKLIGHT_DEFAULT)
 
 # Optimization / LODs without bakes (cards off = the cluster fallback; bakes render on the GPU and
 # are covered by eidoverse's blender/tests/trees2): the mobile ladder, the preview level, auto LOD,
@@ -148,6 +165,47 @@ bpy.ops.seedthree.grow(replace=True)
 res = bpy.ops.seedthree.forest_ring()
 forest = [o for o in scene.objects if o.get('seedthree_forest')]
 check('FINISHED' in res and len(forest) == 1, 'forest ring (no billboard baked): %s' % [o.name for o in forest])
+# the Environment / Camera toggles act live, as in the app
+st.forest_count = 16
+forest = [o for o in scene.objects if o.get('seedthree_forest')]
+check(len(forest) == 1 and len(forest[0].data.vertices) == 16, 'Forest trees 16 rebuilds the grove: %s slots' % (
+    [len(o.data.vertices) for o in forest]))
+st.forest_count = 0
+check(not [o for o in scene.objects if o.get('seedthree_forest')], 'Forest trees 0 clears the grove')
+st.forest_count = 64
+st.ao = True
+on = (scene.eevee.use_fast_gi, scene.eevee.fast_gi_method)
+st.ao = False
+off = (scene.eevee.use_fast_gi, scene.eevee.fast_gi_method)
+check(on == (True, 'GLOBAL_ILLUMINATION') and off == (False, 'AMBIENT_OCCLUSION_ONLY'),
+      'Ambient occlusion toggles EEVEE fast GI: on %s, off %s' % (on, off))
+cam = scene.camera
+scene.frame_start, scene.frame_end = 1, 61
+st.auto_rotate = True
+piv = cam.parent
+scene.frame_set(1)
+p1 = cam.matrix_world.translation.copy()
+scene.frame_set(61)
+p2 = cam.matrix_world.translation.copy()
+import math  # noqa: E402
+turn = math.degrees((p2 - piv.matrix_world.translation).to_2d().angle_signed((p1 - piv.matrix_world.translation).to_2d())) \
+    if piv is not None else 0.0
+want = 360.0 * (60 / (scene.render.fps / scene.render.fps_base)) / 60.0
+check(piv is not None and piv.get('seedthree_orbit') and abs(abs(turn) - want) < 0.05,
+      'Auto-rotate keys an orbit of the scene camera: %.2f deg over 60 frames, want %.2f (one turn per 60 s)' % (turn, want))
+scene.frame_set(1)
+st.auto_rotate = False
+check(cam.parent is None and not [o for o in bpy.data.objects if o.get('seedthree_orbit')],
+      'Auto-rotate off removes the orbit')
+from seedthree.scene import terrain as T  # noqa: E402
+env = T.build_environment(scene, 'temperate', 1, 280, 15, 12, api.shaped_species('whiteOak', None, 1)[0], segs=48)
+plain = env['terrain'].data.materials[0].name
+st.spom = True
+spom_mat = env['terrain'].data.materials[0].name
+st.spom = False
+check(spom_mat != plain and env['terrain'].data.materials[0].name == plain or
+      env['terrain'].data.materials[0].name.startswith(plain.split('.')[0]),
+      'Parallax terrain swaps the terrain material: %s -> %s -> %s' % (plain, spom_mat, env['terrain'].data.materials[0].name))
 n_before = len(bpy.data.objects)
 bpy.ops.seedthree.grow(replace=True)
 check(len(bpy.data.objects) <= n_before, 'regrow removes the whole old tree (%d -> %d objects)' % (n_before, len(bpy.data.objects)))

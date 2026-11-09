@@ -126,6 +126,17 @@ def _on_sun(self, context):
     set_sun(self.sun)
 
 
+_BACKLIGHT_ITEMS = [
+    ('translucent', 'Translucent', 'A Translucent BSDF on the leaf normal: the glow x the leaf\'s Lambert factor '
+                                   '(it fades at the silhouette); every lamp reaches it'),
+    ('glow', 'Glow (the app)', "The app's backlit glow: the sun's shadowed light through the leaf, strongest "
+                              'looking toward the sun, with no Lambert factor, so the crown glows to its '
+                              'silhouette and sunlit leaves carry the ambient scatter. A heavy shader (four '
+                              'light reads): check the first render'),
+]
+from .bl.materials import BACKLIGHT_DEFAULT as _BACKLIGHT_DEFAULT  # noqa: E402  (the library's default route)
+
+
 def _last_tree(context):
     st = context.scene.seedthree
     root = bpy.data.objects.get(st.last_root) if st.last_root else None
@@ -183,6 +194,78 @@ def _on_haze(self, context):
     A.set_haze_enabled(context.scene, self.haze and self.preview == 'AUTO')
 
 
+def _forest_objects(root):
+    label = '%s forest' % root.name
+    return [o for o in (bpy.data.objects.get(label), bpy.data.objects.get(label + ' billboards')) if o is not None]
+
+
+def _on_forest_count(self, context):
+    """main.js onForest -> updateForest: the grove around the last tree follows the count (0 clears it)."""
+    if _BUSY[0]:
+        return
+    root = _last_tree(context)
+    if root is None or not _forest_objects(root):
+        return
+    for o in _forest_objects(root):
+        bpy.data.objects.remove(o, do_unlink=True)
+    if self.forest_count > 0:
+        bpy.ops.seedthree.forest_ring('EXEC_DEFAULT')
+
+
+def _on_ao(self, context):
+    """The app's Ambient occlusion (N8AO) toggle: EEVEE's own horizon-scan GI / AO."""
+    ee = context.scene.eevee
+    if hasattr(ee, 'use_fast_gi'):
+        ee.use_fast_gi = bool(self.ao)
+    if hasattr(ee, 'fast_gi_method'):
+        ee.fast_gi_method = 'GLOBAL_ILLUMINATION' if self.ao else 'AMBIENT_OCCLUSION_ONLY'
+
+
+def _orbit_of(cam):
+    p = cam.parent if cam is not None else None
+    return p if p is not None and p.get('seedthree_orbit') else None
+
+
+def _on_auto_rotate(self, context):
+    """OrbitControls.autoRotate on the scene camera: a keyed orbit around the last tree (one
+    turn per 60 s at speed 1), removed again when switched off."""
+    if _BUSY[0]:
+        return
+    scene = context.scene
+    cam = scene.camera
+    if cam is None:
+        return
+    piv = _orbit_of(cam)
+    if piv is not None:
+        mw = cam.matrix_world.copy()
+        cam.parent = None
+        cam.matrix_world = mw
+        bpy.data.objects.remove(piv, do_unlink=True)
+    if not self.auto_rotate or self.auto_rotate_speed <= 0:
+        return
+    root = _last_tree(context)
+    from mathutils import Vector
+    from .scene.demo import orbit_camera
+    target = Vector((0.0, 0.0, 0.0))
+    if root is not None:
+        pts = [o.matrix_world @ Vector(c) for o in root.children_recursive if o.type == 'MESH' for c in o.bound_box]
+        target = sum(pts, Vector()) / len(pts) if pts else root.matrix_world.translation.copy()
+    orbit_camera(scene, cam, target, self.auto_rotate_speed)
+
+
+def _on_spom(self, context):
+    """The app's Parallax terrain toggle rebuilds the biome's terrain material."""
+    if _BUSY[0]:
+        return
+    for ob in context.scene.objects:
+        if ob.get('seedthree_terrain_seed') is not None and ob.get('seedthree_biome'):
+            from .scene.terrain import terrain_material
+            nm = ob.get('seedthree_terrain_species') or ''
+            sp = next((s for s in SPECIES.values() if s.get('name') == nm), None)
+            ob.data.materials.clear()
+            ob.data.materials.append(terrain_material(ob['seedthree_biome'], sp, self.spom))
+
+
 class SeedThreeSettings(bpy.types.PropertyGroup):
     __annotations__ = {
         'species': EnumProperty(name='Species', items=_SPECIES_ITEMS, default='whiteOak', update=_on_species),
@@ -196,6 +279,9 @@ class SeedThreeSettings(bpy.types.PropertyGroup):
         'sun': PointerProperty(name='Backlight sun', type=bpy.types.Object, poll=_is_sun, update=_on_sun,
                                description='The sun lamp the leaf, frond and spine backlight follows (every '
                                            'SeedThree plant in the file). Empty: Grow binds the strongest sun lamp'),
+        'backlight': EnumProperty(name='Backlight', items=_BACKLIGHT_ITEMS, default=_BACKLIGHT_DEFAULT, update=_on_dial,
+                                  description='How the leaf, frond and spine backlight reaches EEVEE, for plants '
+                                              'grown from now on'),
         # Optimization / LODs (main.js optState)
         'preview': EnumProperty(name='Preview level', items=_PREVIEW_ITEMS, default='AUTO', update=_on_preview),
         'mobileTarget': BoolProperty(name='Mobile performance target', default=False, update=_on_dial,
@@ -228,14 +314,21 @@ class SeedThreeSettings(bpy.types.PropertyGroup):
         'sun_az': FloatProperty(name='Sun azimuth', min=0, max=360, default=40, update=_on_sky),
         'sun_el': FloatProperty(name='Sun elevation', min=5, max=88, default=32, update=_on_sky),
         'show_scale_ref': BoolProperty(name='Scale ref (1.8 m)', default=False, update=_on_scale_ref),
-        'haze': BoolProperty(name='Distance haze', default=True, update=_on_haze),
-        'spom': BoolProperty(name='Parallax terrain (SPOM)', default=False,
-                             description='Build demo scene with the app\'s parallax-occlusion terrain (heavier shader)'),
-        'forest_count': IntProperty(name='Forest trees', min=0, max=96, step=8, default=64),
+        'haze': BoolProperty(name='Distance haze', default=True, update=_on_haze,
+                             description='The ring haze; off, the app\'s classic range fog (95-300 m, desert 55-230 m)'),
+        'spom': BoolProperty(name='Parallax terrain (SPOM)', default=False, update=_on_spom,
+                             description='The app\'s parallax-occlusion terrain material (a heavier shader): swaps the '
+                                         'demo terrain\'s material, and Build demo scene uses it'),
+        'ao': BoolProperty(name='Ambient occlusion', default=False, update=_on_ao,
+                           description='The app\'s N8AO toggle: EEVEE\'s horizon-scan global illumination and AO'),
+        'forest_count': IntProperty(name='Forest trees', min=0, max=96, step=8, default=64, update=_on_forest_count,
+                                    description='The grove around the plant (Forest ring); changing it rebuilds an '
+                                                'existing grove, 0 clears it'),
         # Camera
-        'auto_rotate': BoolProperty(name='Auto-rotate', default=False,
-                                    description='The demo scene\'s camera orbits the plant (keyed)'),
-        'auto_rotate_speed': FloatProperty(name='Rotate speed', min=0, max=4, default=1.0),
+        'auto_rotate': BoolProperty(name='Auto-rotate', default=False, update=_on_auto_rotate,
+                                    description='The scene camera orbits the last plant: a keyed turn, one per 60 s '
+                                                'at speed 1 (OrbitControls.autoRotate)'),
+        'auto_rotate_speed': FloatProperty(name='Rotate speed', min=0, max=4, default=1.0, update=_on_auto_rotate),
     }
 
 
@@ -374,6 +467,8 @@ class SEEDTHREE_OT_grow(bpy.types.Operator):
             self.report({'WARNING'}, 'LOD3 / LOD4 exist with the mobile performance target only: growing LOD2')
             level = 'LOD2'
         from .bl.build import create_tree
+        from .bl.materials import set_backlight
+        set_backlight(st.backlight)
         out = create_tree(species=st.species, seed=st.seed, controls=controls_from_ui(st), lod=_lod_opts(st),
                           level=level, location=loc, rotation_z=rot, fruit=st.fruit, sun_light=st.sun,
                           cards=st.cards, billboard=st.billboard)
@@ -507,7 +602,7 @@ class SEEDTHREE_OT_demo_scene(bpy.types.Operator):
         demo = build_demo_scene(st.species, seed=st.seed, controls=controls_from_ui(st), lod=_lod_opts(st),
                                 sun_az=st.sun_az, sun_el=st.sun_el, forest_count=st.forest_count, haze=st.haze,
                                 scale_ref=st.show_scale_ref, autorotate=st.auto_rotate,
-                                autorotate_speed=st.auto_rotate_speed, scene=context.scene, spom=st.spom)
+                                autorotate_speed=st.auto_rotate_speed, scene=context.scene, spom=st.spom, ao=st.ao)
         st.last_root = demo['tree']['object'].name
         d = demo.get('lodDistances') or {}
         _BUSY[0] = True
@@ -776,6 +871,7 @@ class SEEDTHREE_PT_environment(_Panel, bpy.types.Panel):
         col.prop(st, 'show_scale_ref')
         col.prop(st, 'haze')
         col.prop(st, 'spom')
+        col.prop(st, 'ao')
         col.prop(st, 'forest_count')
         col.operator('seedthree.demo_scene', icon='WORLD')
         col.operator('seedthree.forest_ring', icon='OUTLINER_OB_POINTCLOUD')
@@ -803,6 +899,7 @@ class SEEDTHREE_PT_light(_Panel, bpy.types.Panel):
         st = context.scene.seedthree
         col = self.layout.column()
         col.prop(st, 'sun')
+        col.prop(st, 'backlight')
         col.operator('seedthree.light_probe', icon='LIGHTPROBE_VOLUME')
         col.label(text='Bake after the sky and sun are final.')
 
@@ -817,7 +914,7 @@ class SEEDTHREE_PT_camera(_Panel, bpy.types.Panel):
         col = self.layout.column()
         col.prop(st, 'auto_rotate')
         col.prop(st, 'auto_rotate_speed')
-        col.label(text='Used by Build demo scene (a keyed orbit).')
+        col.label(text='A keyed orbit of the scene camera.')
 
 
 class SEEDTHREE_PT_export(_Panel, bpy.types.Panel):

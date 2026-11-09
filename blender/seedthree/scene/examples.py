@@ -12,7 +12,8 @@
     shot['probe_frames']        # the three frames the reference compares (left 3/4, front, right 3/4)
 
 Everything is keyed (the camera path), so the saved .blend renders any frame on its own.
-three -> Blender axes: (x, y, z) -> (x, -z, y). The JS ACES tone map becomes AgX.
+three -> Blender axes: (x, y, z) -> (x, -z, y). The JS ACES tone map becomes AgX 'High
+Contrast' at log2(exposure) + 0.23 stops (tonemap.py).
 """
 
 import math
@@ -36,9 +37,12 @@ def _bl(v):
     return Vector((v[0], -v[2], v[1]))
 
 
-def hemisphere_world(sky, ground, intensity, name):
+def hemisphere_world(sky, ground, intensity, name, background=None, background_strength=1.0):
     """three's HemisphereLight as the world: sky colour above the horizon, ground colour
-    below, radiance intensity / pi (a Lambert surface then gets three's irradiance)."""
+    below, radiance intensity / pi (a Lambert surface then gets three's irradiance).
+    background: the scene.background colour camera rays see (hex; three draws it flat,
+    through the tone map like the frame) at background_strength; None shows the
+    hemisphere itself."""
     w = bpy.data.worlds.new(name)
     w.use_nodes = True
     nt = w.node_tree
@@ -59,11 +63,23 @@ def hemisphere_world(sky, ground, intensity, name):
     nt.links.new(mix.outputs[2], bg.inputs['Color'])
     bg.inputs['Strength'].default_value = intensity / math.pi
     out = nt.nodes.new('ShaderNodeOutputWorld')
-    nt.links.new(bg.outputs[0], out.inputs['Surface'])
+    surf = bg.outputs[0]
+    if background is not None:
+        flat = nt.nodes.new('ShaderNodeBackground')
+        flat.inputs['Color'].default_value = (*_lin(background), 1)
+        flat.inputs['Strength'].default_value = float(background_strength)
+        lp = nt.nodes.new('ShaderNodeLightPath')
+        pick = nt.nodes.new('ShaderNodeMixShader')
+        nt.links.new(lp.outputs['Is Camera Ray'], pick.inputs[0])
+        nt.links.new(bg.outputs[0], pick.inputs[1])
+        nt.links.new(flat.outputs[0], pick.inputs[2])
+        surf = pick.outputs[0]
+    nt.links.new(surf, out.inputs['Surface'])
     return w
 
 
-def _scene_basics(scene, w, h, exposure_stops, samples, fps=30):
+def _scene_basics(scene, w, h, aces_exposure, samples, fps=30):
+    """aces_exposure: the JS renderer.toneMappingExposure (ACES), as the matching AgX view."""
     scene.render.engine = 'BLENDER_EEVEE'
     scene.render.resolution_x, scene.render.resolution_y = int(w), int(h)
     scene.render.resolution_percentage = 100
@@ -72,8 +88,8 @@ def _scene_basics(scene, w, h, exposure_stops, samples, fps=30):
     for attr, val in (('use_shadows', True), ('use_raytracing', True)):
         if hasattr(scene.eevee, attr):
             setattr(scene.eevee, attr, val)
-    scene.view_settings.view_transform = 'AgX'
-    scene.view_settings.exposure = exposure_stops
+    from .tonemap import aces_view
+    aces_view(scene, aces_exposure)
 
 
 def _camera(scene, fov_v_deg, near, far, name):
@@ -124,13 +140,15 @@ def reference_turntable(species='paperBirch', seed=1, width=960, height=960, fps
     camera that fits its height and width with a 12 % margin, swinging from the left
     three-quarter (-38 degrees) over the front to the right three-quarter (+68) at 5.5 %
     of the tree's height above its centre; a hemisphere 0xeaf4ff / 0x46503f x 1.45, a sun
-    0xfff1d8 x 3.2 from (-0.85, 1.45, 0.75) x size, a 0x70786d ground 2.4 x the crown.
+    0xfff1d8 x 3.2 from (-0.85, 1.45, 0.75) x size, a 0x70786d ground 2.4 x the crown, the
+    flat 0xaeb9bf backdrop, ACES at exposure 1.05.
     -> {'tree', 'camera', 'sun', 'ground', 'frames', 'probe_frames', 'dimensions'}"""
     scene = scene or bpy.context.scene
     frames = max(1, int(round(duration * fps)))
     scene.frame_start, scene.frame_end = 1, frames
-    _scene_basics(scene, width, height, math.log2(1.05), samples, fps)
-    scene.world = hemisphere_world(0xeaf4ff, 0x46503f, 1.45, 'SeedThree reference sky')
+    _scene_basics(scene, width, height, 1.05, samples, fps)
+    # scene.background 0xaeb9bf: the flat backdrop behind the ground card
+    scene.world = hemisphere_world(0xeaf4ff, 0x46503f, 1.45, 'SeedThree reference sky', background=0xaeb9bf)
     cam = _camera(scene, 47, 0.05, 500, 'SeedThree reference camera')
     sun = _sun(scene, 0xfff1d8, 3.2, 'SeedThree reference sun')
     api.set_wind(strength=0.0, speed=1.0)
@@ -189,8 +207,11 @@ def example_scene(width=1280, height=720, fps=30, seconds=8.0, samples=32, scene
     scene = scene or bpy.context.scene
     frames = max(1, int(round(seconds * fps)))
     scene.frame_start, scene.frame_end = 1, frames
-    _scene_basics(scene, width, height, 0.0, samples, fps)
-    scene.world = hemisphere_world(0xcfe6ff, 0x5a4a36, 1.1, 'SeedThree example sky')
+    _scene_basics(scene, width, height, 1.0, samples, fps)
+    # the JS leaves the sky to the film (its frame clears to black); a plain sky in the
+    # hemisphere's own colour stands in, with no ground-coloured band below the horizon
+    scene.world = hemisphere_world(0xcfe6ff, 0x5a4a36, 1.1, 'SeedThree example sky', background=0xcfe6ff,
+                                   background_strength=1.1 / math.pi)
     cam = _camera(scene, 45, 0.1, 300, 'SeedThree example camera')
     sun = _sun(scene, 0xfff0dd, 3.2, 'SeedThree example sun')
     _aim(sun, _bl((14, 18, 10)), (0, 0, 0))

@@ -212,15 +212,14 @@ def sun_direction(az_deg=40.0, el_deg=32.0):
 
 
 def sun_color_intensity(el_deg):
-    """main.js updateSun: warms and dims toward the horizon."""
+    """main.js updateSun: warms and dims toward the horizon. three r184's Color.setHSL(h, s,
+    l) takes its colour space argument's default, the linear working space, so the HSL
+    triple is already the linear colour (no sRGB decode)."""
     import colorsys
     t = min(1.0, max(0.0, el_deg / 60.0))
     h, s, l = 0.095 + 0.045 * t, 0.55 - 0.35 * t, 0.62 + 0.24 * t
     r, g, b = colorsys.hls_to_rgb(h, l, s)
-    # three Color.setHSL works in sRGB-encoded values (working space conversion): linearize
-    def lin(c):
-        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
-    return (lin(r), lin(g), lin(b)), 2.2 + 1.1 * t
+    return (r, g, b), 2.2 + 1.1 * t
 
 
 def world_sky(biome='temperate', sun_dir=(0.6, 0.53, 0.55), name=None, hemi=(0x9fc0ff, 0x3a4a2a, 1.2)):
@@ -373,6 +372,8 @@ def build_environment(scene=None, biome='temperate', seed=1, radius=280, flat_ra
     ob['seedthree_terrain_radius'] = float(radius)
     ob['seedthree_terrain_flat'] = float(flat_radius)
     ob['seedthree_terrain_hill'] = float(hill_height)
+    ob['seedthree_biome'] = biome                       # for the add-on's Parallax terrain toggle
+    ob['seedthree_terrain_species'] = (species or {}).get('name', '')
     w = world_sky(biome, sun_direction(sun_az, sun_el))
     scene.world = w
     sun = sun_lamp(scene, sun_az, sun_el)

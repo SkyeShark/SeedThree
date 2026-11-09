@@ -103,13 +103,13 @@ def image_from_pixels(name, data, srgb, pack=True):
 
 def channel_group():
     ng = bpy.data.node_groups.get(GROUP)
-    if ng is not None and ng.bl_idname == 'ShaderNodeTree' and 'Channel' in ng.nodes and 'RawNormal' in ng.nodes:
+    if ng is not None and ng.bl_idname == 'ShaderNodeTree' and 'Channel' in ng.nodes and 'Outward' in ng.nodes:
         return ng
     if ng is not None:
         ng.name = GROUP + ' (old)'
     ng = bpy.data.node_groups.new(GROUP, 'ShaderNodeTree')
     for nm, kind in (('Base', 'NodeSocketColor'), ('Rough', 'NodeSocketFloat'), ('Trans', 'NodeSocketFloat'),
-                     ('Alpha', 'NodeSocketFloat')):
+                     ('Alpha', 'NodeSocketFloat'), ('Thin', 'NodeSocketFloat')):
         ng.interface.new_socket(name=nm, in_out='INPUT', socket_type=kind)
     ng.interface.new_socket(name='Color', in_out='OUTPUT', socket_type='NodeSocketColor')
     N = ng.nodes
@@ -135,8 +135,49 @@ def channel_group():
     raw.operation = 'SCALE'
     L.new(geo.outputs['Normal'], raw.inputs[0])       # the smooth normal (three's normalViewGeometry)
     L.new(flip.outputs[0], raw.inputs['Scale'])
+    # The billboard bake (Outward = 1) turns the normals of thin double-sided parts (leaves,
+    # fronds, spines: the materials with an alpha cutout, input Thin) away from the plant's
+    # centre: their raw sign is just the generator's winding, so the detail of a whole plant
+    # could lean toward the back of the card (the Joshua tree's did, and its billboard lit up
+    # under a sun behind it). Outward, the leaves seen from the bake camera lean toward it, as
+    # the visible side of each leaf does, and both cards still bake the same normal where they
+    # cross. Closed bark keeps its own outward normal.
+    outward = N.new('ShaderNodeValue')
+    outward.name = outward.label = 'Outward'
+    outward.outputs[0].default_value = 0.0
+    centre = N.new('ShaderNodeCombineXYZ')
+    centre.name = centre.label = 'Bake Center'
+    d = N.new('ShaderNodeVectorMath')
+    d.operation = 'SUBTRACT'
+    L.new(geo.outputs['Position'], d.inputs[0])
+    L.new(centre.outputs[0], d.inputs[1])
+    dot = N.new('ShaderNodeVectorMath')
+    dot.operation = 'DOT_PRODUCT'
+    L.new(raw.outputs['Vector'], dot.inputs[0])
+    L.new(d.outputs['Vector'], dot.inputs[1])
+    inward = N.new('ShaderNodeMath')
+    inward.operation = 'LESS_THAN'
+    L.new(dot.outputs['Value'], inward.inputs[0])
+    inward.inputs[1].default_value = 0.0
+    turn = N.new('ShaderNodeMath')
+    turn.operation = 'MULTIPLY'
+    L.new(inward.outputs[0], turn.inputs[0])
+    L.new(outward.outputs[0], turn.inputs[1])
+    turn2 = N.new('ShaderNodeMath')
+    turn2.operation = 'MULTIPLY'
+    L.new(turn.outputs[0], turn2.inputs[0])
+    L.new(gin.outputs['Thin'], turn2.inputs[1])
+    sgn = N.new('ShaderNodeMath')
+    sgn.operation = 'MULTIPLY_ADD'
+    L.new(turn2.outputs[0], sgn.inputs[0])
+    sgn.inputs[1].default_value = -2.0
+    sgn.inputs[2].default_value = 1.0
+    raw2 = N.new('ShaderNodeVectorMath')
+    raw2.operation = 'SCALE'
+    L.new(raw.outputs['Vector'], raw2.inputs[0])
+    L.new(sgn.outputs[0], raw2.inputs['Scale'])
     sep = N.new('ShaderNodeSeparateXYZ')
-    L.new(raw.outputs['Vector'], sep.inputs[0])
+    L.new(raw2.outputs['Vector'], sep.inputs[0])
     n3 = N.new('ShaderNodeCombineXYZ')            # Blender (x, y, z) -> three (x, z, -y)
     L.new(sep.outputs['X'], n3.inputs[0])
     L.new(sep.outputs['Z'], n3.inputs[1])
@@ -228,6 +269,7 @@ def capture_material(src):
         nt.links.new(alpha_src, grp.inputs['Alpha'])
     else:
         grp.inputs['Alpha'].default_value = 1.0
+    grp.inputs['Thin'].default_value = 1.0 if alpha_src is not None else 0.0   # a cut-out sheet, not closed bark
     tex = next((n for n in nodes if n.type == 'TEX_IMAGE' and n.image is not None and 'translucency' in n.image.name.lower()), None)
     if tex is not None:
         sep = nodes.new('ShaderNodeSeparateColor')
@@ -309,12 +351,18 @@ def _read_exr(path, size):
 
 
 def bake_objects_to_textures(objects, views, size=1024, dilate_passes=12, samples=16, name='bake', pack=True,
-                             keep_files=None):
+                             keep_files=None, outward_center=None):
     """bakeGroupToTextures: render `objects` (Blender objects, any scene) through each
     view in four channels. views: core framings (three axes: center, dir, halfW, halfH,
     depth, near, far, name). -> {view name: {channel: packed bpy image}}.
     The objects are linked into a temporary scene with capture materials swapped in,
-    then restored. keep_files: a folder to also write the channel PNGs into."""
+    then restored. keep_files: a folder to also write the channel PNGs into.
+    outward_center: a Blender-space point; thin cut-out parts then bake their normals turned
+    away from it (the billboard bake; see channel_group). None bakes the raw normals."""
+    grp = channel_group()
+    grp.nodes['Outward'].outputs[0].default_value = 0.0 if outward_center is None else 1.0
+    for i, c in enumerate(outward_center or (0.0, 0.0, 0.0)):
+        grp.nodes['Bake Center'].inputs[i].default_value = float(c)
     sc, cam = _bake_scene(size, samples)
     tmp = tempfile.mkdtemp(prefix='seedthree_bake_')
     swaps = []
@@ -373,6 +421,7 @@ def bake_objects_to_textures(objects, views, size=1024, dilate_passes=12, sample
             out[view['name']] = imgs
         return out
     finally:
+        grp.nodes['Outward'].outputs[0].default_value = 0.0
         for slot, mat in swaps:
             slot.material = mat
         for m in mods:

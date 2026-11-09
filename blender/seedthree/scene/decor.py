@@ -536,3 +536,30 @@ def make_cattails(placements, collection=None, wind=True, **spec_overrides):
     textures = load_ground_cover_textures(CATTAIL_TEXTURE_FILES)
     return make_ground_cover(placements, dict(CATTAIL_CARD_SPEC, **spec_overrides), textures, 'SeedThree cattails',
                              (0.28, 0.42, 0.13), 0.22, collection, wind)
+
+
+# ground-cover.js / cattails.js names, for code written against the JS module. Per-instance
+# tint, anchor and wind vector (addGroundCoverInstanceAttributes) are POINT attributes of the
+# realized clumps (make_ground_cover); textures are file data (no disposeGroundCoverTextures).
+
+def create_ground_cover_material(textures, name='SeedThree ground cover', transmit=(0.3, 0.42, 0.16), alpha_test=0.38):
+    """createGroundCoverMaterial({name, textures, transmit, alphaTest}); the wind amount lives on
+    make_ground_cover (the sway is a Geometry Nodes deformation here, not the material's)."""
+    return ground_cover_material(textures, name, transmit, alpha_test)
+
+
+def create_card_clump_geometry(spec):
+    """createCardClumpGeometry: the deterministic crossed-card clump (core.scatter)."""
+    return card_clump_geometry(spec)
+
+
+def create_cattail_geometry(overrides=None):
+    """createCattailGeometry: the clump with CATTAIL_CARD_SPEC (+ overrides)."""
+    return card_clump_geometry(dict(CATTAIL_CARD_SPEC, **(overrides or {})))
+
+
+def create_cattail_material(textures=None, name='SeedThree cattails', transmit=(0.28, 0.42, 0.13), alpha_test=0.38):
+    """createCattailMaterial: the ground-cover material with the reeds' transmit (textures
+    default to CATTAIL_TEXTURE_FILES from the leaves folder)."""
+    return ground_cover_material(textures or load_ground_cover_textures(CATTAIL_TEXTURE_FILES), name, transmit,
+                                 alpha_test)

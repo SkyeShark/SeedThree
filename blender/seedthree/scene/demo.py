@@ -15,7 +15,8 @@ way a species switch frames it (with the species' LOD distances), optionally orb
 forest rebin all play from a saved .blend.
 
 Defaults follow the app: sun azimuth 40, elevation 32 (late afternoon), wind 0.5 / 1.0,
-haze on, AO (N8AO) off, ACES exposure 1.3 -> AgX at log2(1.3) stops.
+haze on, AO (N8AO) off, three's ACES at exposure 1.3 -> AgX 'High Contrast' at log2(1.3)
++ 0.23 stops (tonemap.py: the same display values on a neutral ramp).
 """
 
 import math
@@ -51,13 +52,8 @@ def _scene_settings(scene, w, h, samples, ao):
             pass
     if hasattr(ee, 'use_fast_gi'):
         ee.use_fast_gi = bool(ao)
-    vs = scene.view_settings
-    vs.view_transform = 'AgX'
-    try:
-        vs.look = 'AgX - Base Contrast'
-    except TypeError:
-        pass
-    vs.exposure = math.log2(1.3)
+    from .tonemap import aces_view
+    aces_view(scene, 1.3)          # main.js: ACESFilmicToneMapping, toneMappingExposure 1.3
 
 
 def scale_reference(scene, visible=True):
@@ -89,6 +85,11 @@ def orbit_camera(scene, cam, target, speed=1.0, frame_start=None, frame_end=None
     piv = bpy.data.objects.new('SeedThree orbit', None)
     scene.collection.objects.link(piv)
     piv.location = target
+    piv['seedthree_orbit'] = True
+    # matrix_world is only current after a depsgraph update: the camera was just framed (its
+    # location / rotation set) and the pivot just made; read stale, the camera went back to its
+    # rest transform (looking straight down)
+    bpy.context.view_layer.update()
     mw = cam.matrix_world.copy()
     cam.parent = piv
     cam.matrix_parent_inverse = piv.matrix_world.inverted()
@@ -152,13 +153,15 @@ def build_demo_scene(species='whiteOak', seed=1, controls=None, lod=None, sun_az
     if forest_count and billboard:
         out['forest'] = api.make_forest_ring(tree, count=forest_count, seed=seed, billboard_dist=dists['billboardDist'],
                                              height_at=smp.height_xy, meadow_at=smp.meadow_xy)
-    if haze:
-        if desert:
-            col, dens, start = T._lin(0xcabfa2), 1.9, 40.0
-        else:
-            f, r = T._lin(env['fog']), T._lin(0xa8998a)
-            col, dens, start = tuple(a + (b - a) * 0.18 for a, b in zip(f, r)), 1.0, 110.0
-        out['haze'] = A.build_haze(scene, col, dens, start)
+    # main.js buildBiome: the ring haze, and the classic range fog it falls back to while the
+    # Distance fog toggle is off (or a preview level is forced), in the sky's fog colour
+    if desert:
+        col, dens, start = T._lin(0xcabfa2), 1.9, 40.0
+    else:
+        f, r = T._lin(env['fog']), T._lin(0xa8998a)
+        col, dens, start = tuple(a + (b - a) * 0.18 for a, b in zip(f, r)), 1.0, 110.0
+    out['haze'] = A.build_haze(scene, col, dens, start, enabled=haze, fog_color=T._lin(env['fog']),
+                               fog_near=55.0 if desert else 95.0, fog_far=230.0 if desert else 300.0)
     if audio:
         out['audio'] = S.build_ambience(scene, biome, seed)
     out['scaleRef'] = scale_reference(scene, scale_ref)
