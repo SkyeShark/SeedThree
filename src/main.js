@@ -1249,13 +1249,75 @@ async function main() {
 
     scene.add(g);
     forest = g;
-    forestData = { slots, lod2Set, bbSet, halfH };
+    forestData = { slots, lod2Set, bbSet, halfH, pre: precomputeGrove(slots, lod2Set, bbSet, halfH), split: new Uint8Array(N) };
     rebinForest(true);
   }
 
+  // Every slot's instance data, worked out once per grove. The slots never move and the cards are the hero's FROZEN
+  // snapshot, so a slot's (slot x card) matrices, wind vectors and anchors are the same at every rebin: the rebin
+  // copies whole slots of these into the instance buffers instead of recomposing and decomposing every card of every
+  // near tree (64 slots x k cards) four times a second while the camera moves. Same values, same order.
+  function precomputeGrove(slots, lod2Set, bbSet, halfH) {
+    const N = slots.length;
+    const pre = { branches: null, cards: [], bb: [] };
+    if (lod2Set.branches) {
+      const mtx = new Float32Array(N * 16), wvec = new Float32Array(N * 3), apos = new Float32Array(N * 3);
+      slots.forEach((s, i) => {
+        s.mtx.toArray(mtx, i * 16);
+        // wind heading back-rotated by the slot's yaw, unscaled (slots only yaw+scale uniformly); phase anchor is
+        // the slot's trunk base, SHARED with its cards so they crest together
+        const cos = Math.cos(-s.rot), sin = Math.sin(-s.rot);
+        wvec[i * 3] = (WIND_DIR.x * cos + WIND_DIR.z * sin) / s.s;
+        wvec[i * 3 + 1] = 0;
+        wvec[i * 3 + 2] = (WIND_DIR.z * cos - WIND_DIR.x * sin) / s.s;
+        apos[i * 3] = s.pos.x; apos[i * 3 + 1] = s.pos.y; apos[i * 3 + 2] = s.pos.z;
+      });
+      pre.branches = { mtx, wvec, apos };
+    }
+    for (const im of lod2Set.cards) {
+      const { src, k, weights, srcMatrices } = im.userData;
+      const mtx = new Float32Array(N * k * 16), orig = new Float32Array(N * k * 3);
+      const wvec = new Float32Array(N * k * 3), apos = new Float32Array(N * k * 3);
+      let w = 0;
+      for (const s of slots) {
+        for (let j = 0; j < k; j++) {
+          if (srcMatrices) _binM.fromArray(srcMatrices, j * 16); // FROZEN snapshot, never the live hero
+          else src.getMatrixAt(j, _binM);
+          _binOut.multiplyMatrices(s.mtx, _binM);
+          _binOut.toArray(mtx, w * 16);
+          orig[w * 3] = s.origin.x; orig[w * 3 + 1] = s.origin.y; orig[w * 3 + 2] = s.origin.z;
+          // combined (slot × card) frame → wind heading×weight in instance-local space; phase anchor = the slot
+          // base (same as the branches)
+          _binOut.decompose(_binP, _binQ, _binS);
+          const wt = weights ? weights[j] : 0.6;
+          _binW.copy(WIND_DIR).applyQuaternion(_binQ.invert()).divide(_binS).multiplyScalar(wt);
+          wvec[w * 3] = _binW.x; wvec[w * 3 + 1] = _binW.y; wvec[w * 3 + 2] = _binW.z;
+          apos[w * 3] = s.pos.x; apos[w * 3 + 1] = s.pos.y; apos[w * 3 + 2] = s.pos.z;
+          w++;
+        }
+      }
+      pre.cards.push({ k, mtx, orig, wvec, apos });
+    }
+    const q = new THREE.Quaternion(), p = new THREE.Vector3(), sc = new THREE.Vector3();
+    const Y = new THREE.Vector3(0, 1, 0);
+    for (const im of bbSet) {
+      const mtx = new Float32Array(N * 16);
+      slots.forEach((s, i) => {
+        q.setFromAxisAngle(Y, s.rot + im.userData.rotY);
+        p.set(s.pos.x, currentSampler.heightAt(s.pos.x, s.pos.z) + s.s * (halfH - 0.4), s.pos.z);
+        sc.setScalar(s.s);
+        _binOut.compose(p, q, sc);
+        _binOut.toArray(mtx, i * 16);
+      });
+      pre.bb.push(mtx);
+    }
+    return pre;
+  }
+
   // Re-partition the grove between LOD2 geometry and billboards by CAMERA
-  // distance — per-instance LOD. Throttled: ~N distance checks + buffer
-  // rewrites only when the camera has actually moved.
+  // distance — per-instance LOD. Throttled: ~N distance checks while the camera
+  // moves; the buffers are rewritten only when a tree actually changed sides
+  // (whole slots copied from precomputeGrove), and only their used range uploads.
   const _binPos = new THREE.Vector3(1e9, 0, 0);
   let _binTime = 0;
   const _binM = new THREE.Matrix4();
@@ -1264,79 +1326,64 @@ async function main() {
   const _binQ = new THREE.Quaternion();
   const _binS = new THREE.Vector3();
   const _binW = new THREE.Vector3();
+  // copy slot `s` (a run of `n` items of `size`) of `src` to item `w` of the attribute
+  const copySlot = (attr, src, s, n, size, w) => attr.array.set(src.subarray(s * n * size, (s + 1) * n * size), w * size);
+  const upload = (attr, items) => {
+    attr.clearUpdateRanges();
+    if (items > 0) { attr.addUpdateRange(0, items * attr.itemSize); attr.needsUpdate = true; }
+  };
   function rebinForest(force = false) {
     if (!forestData) return;
     const now = performance.now();
     if (!force && (now - _binTime < 250 || camera.position.distanceToSquared(_binPos) < 4)) return;
     _binTime = now;
     _binPos.copy(camera.position);
-    const { slots, lod2Set, bbSet, halfH } = forestData;
-    const near = [], far = [];
-    for (const s of slots) {
-      (bbSet.length && camera.position.distanceTo(s.pos) > optState.billboardDist ? far : near).push(s);
+    const { slots, lod2Set, bbSet, pre, split } = forestData;
+    // the near (0) / far (1) split, slot by slot: nothing to write while it holds
+    let changed = force;
+    for (let i = 0; i < slots.length; i++) {
+      const far = bbSet.length && camera.position.distanceTo(slots[i].pos) > optState.billboardDist ? 1 : 0;
+      if (split[i] !== far) { split[i] = far; changed = true; }
     }
+    if (!changed) return;
     if (lod2Set.branches) {
-      const bwv = lod2Set.branches.geometry.attributes.aWindVec;
-      const bap = lod2Set.branches.geometry.attributes.aAnchorPos;
-      near.forEach((s, i) => {
-        lod2Set.branches.setMatrixAt(i, s.mtx);
-        // wind heading back-rotated by the slot's yaw, unscaled (slots only
-        // yaw+scale uniformly — cheaper than a matrix decompose); phase anchor
-        // is the slot's trunk base, SHARED with its cards so they crest together
-        const cos = Math.cos(-s.rot), sin = Math.sin(-s.rot);
-        bwv.setXYZ(i,
-          (WIND_DIR.x * cos + WIND_DIR.z * sin) / s.s,
-          0,
-          (WIND_DIR.z * cos - WIND_DIR.x * sin) / s.s);
-        bap.setXYZ(i, s.pos.x, s.pos.y, s.pos.z);
-      });
-      bwv.needsUpdate = true;
-      bap.needsUpdate = true;
-      lod2Set.branches.count = near.length;
-      lod2Set.branches.instanceMatrix.needsUpdate = true;
-    }
-    for (const im of lod2Set.cards) {
-      const { src, k, weights, srcMatrices } = im.userData;
-      const orig = im.geometry.attributes.aTreeOrigin;
-      const wvec = im.geometry.attributes.aWindVec;
-      const apos = im.geometry.attributes.aAnchorPos;
+      const im = lod2Set.branches, bwv = im.geometry.attributes.aWindVec, bap = im.geometry.attributes.aAnchorPos;
       let w = 0;
-      for (const s of near) {
-        for (let j = 0; j < k; j++) {
-          if (srcMatrices) _binM.fromArray(srcMatrices, j * 16); // FROZEN snapshot, never the live hero
-          else src.getMatrixAt(j, _binM);
-          _binOut.multiplyMatrices(s.mtx, _binM);
-          im.setMatrixAt(w, _binOut);
-          orig.setXYZ(w, s.origin.x, s.origin.y, s.origin.z);
-          // combined (slot × card) frame → wind heading×weight in instance-
-          // local space; phase anchor = the slot base (same as the branches)
-          _binOut.decompose(_binP, _binQ, _binS);
-          const wt = weights ? weights[j] : 0.6;
-          _binW.copy(WIND_DIR).applyQuaternion(_binQ.invert()).divide(_binS).multiplyScalar(wt);
-          wvec.setXYZ(w, _binW.x, _binW.y, _binW.z);
-          apos.setXYZ(w, s.pos.x, s.pos.y, s.pos.z);
-          w++;
-        }
+      for (let s = 0; s < slots.length; s++) {
+        if (split[s]) continue;
+        copySlot(im.instanceMatrix, pre.branches.mtx, s, 1, 16, w);
+        copySlot(bwv, pre.branches.wvec, s, 1, 3, w);
+        copySlot(bap, pre.branches.apos, s, 1, 3, w);
+        w++;
       }
       im.count = w;
-      im.instanceMatrix.needsUpdate = true;
-      orig.needsUpdate = true;
-      wvec.needsUpdate = true;
-      apos.needsUpdate = true;
+      upload(im.instanceMatrix, w); upload(bwv, w); upload(bap, w);
     }
-    const q = new THREE.Quaternion(), p = new THREE.Vector3(), sc = new THREE.Vector3();
-    const Y = new THREE.Vector3(0, 1, 0);
-    for (const im of bbSet) {
-      far.forEach((s, i) => {
-        q.setFromAxisAngle(Y, s.rot + im.userData.rotY);
-        p.set(s.pos.x, currentSampler.heightAt(s.pos.x, s.pos.z) + s.s * (halfH - 0.4), s.pos.z);
-        sc.setScalar(s.s);
-        _binOut.compose(p, q, sc);
-        im.setMatrixAt(i, _binOut);
-      });
-      im.count = far.length;
-      im.instanceMatrix.needsUpdate = true;
-    }
+    lod2Set.cards.forEach((im, c) => {
+      const { k, mtx, orig, wvec, apos } = pre.cards[c];
+      const ga = im.geometry.attributes;
+      let w = 0;
+      for (let s = 0; s < slots.length; s++) {
+        if (split[s]) continue;
+        copySlot(im.instanceMatrix, mtx, s, k, 16, w);
+        copySlot(ga.aTreeOrigin, orig, s, k, 3, w);
+        copySlot(ga.aWindVec, wvec, s, k, 3, w);
+        copySlot(ga.aAnchorPos, apos, s, k, 3, w);
+        w += k;
+      }
+      im.count = w;
+      upload(im.instanceMatrix, w); upload(ga.aTreeOrigin, w); upload(ga.aWindVec, w); upload(ga.aAnchorPos, w);
+    });
+    bbSet.forEach((im, b) => {
+      let w = 0;
+      for (let s = 0; s < slots.length; s++) {
+        if (!split[s]) continue;
+        copySlot(im.instanceMatrix, pre.bb[b], s, 1, 16, w);
+        w++;
+      }
+      im.count = w;
+      upload(im.instanceMatrix, w);
+    });
   }
 
   function onOpt(kind) {
