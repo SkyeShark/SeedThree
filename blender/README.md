@@ -223,6 +223,29 @@ These are reported here for SeedThree main.
 - (i) The billboard's baked normal detail turns with the card (a rotated plant, a
   grove slot's yaw) and is mirrored across the card on its back face; the app
   uses it unturned, in the plant's own frame, from either side.
+- (j) The parallax terrain (SPOM) marches relief that looks like the ground.
+  The app's `_height.png` maps are streaky texel-scale noise that does not
+  follow the stones, slabs and cracks of their own albedo and normal maps (the
+  gravel floor's has no pebbles in it at all), marched 0.035 rock tiles deep
+  (25 cm) x the layer's push. Seen from eye height that is a bed of needles,
+  the app's march as well as this one: reading the heights at LOD 0 as the JS
+  does, or the layers without mips, leaves it unchanged. Ground seen from
+  standing height (desert pavement in the Mojave and Death Valley, caliche,
+  scree) is a nearly flat bed of stones a few centimetres proud. So
+  `heights='normals'` (the default) integrates each layer's own normal map into
+  its relief (Frankot-Chellappa: periodic, so the tile stays seamless),
+  band-passed (the mesh carries shapes over ~0.3 m, the normal map the grain
+  under ~3 cm), as deep as those slopes describe x 2 (1.8-4.8 cm). Six of the
+  eleven ground normal maps integrate only as DirectX maps (green down:
+  residual 0.05-0.06 against 0.64-0.70 as OpenGL); this material reads those six
+  with their green flipped so shading and relief agree (the inline material and
+  the app read all as OpenGL). The desert floor keeps its own 4 m tile, as with
+  SPOM off (the app's march reads it at the 7.27 m rock tile, so its stones grow
+  1.8x when the toggle goes on). `heights='app'` keeps the app's maps, depths,
+  pushes and floor tile. The softer look of the temperate rock with SPOM on is
+  the v2 material's per-layer roughness maps (rock3 / rock5 0.88-0.90 where the
+  inline material uses rock's 0.42 for every variant), as in the app; the
+  albedo itself is as sharp (mean |Laplacian| 0.022 against 0.021 off).
 - The spines dial no longer mutates the shared species preset.
 
 ## Blender-specific notes
@@ -340,7 +363,25 @@ These are reported here for SeedThree main.
   desert 55-230 m), from the Depth pass; `set_fog_on(scene, False)` drops both.
   The demo's sky needs its compositor. The parallax terrain (SPOM, `scene/spom.py`) is the app's
   optional toggle, unrolled into shader nodes (48 march steps, 12 shadow
-  steps).
+  steps); what it marches is fix (j) above.
+- The demo's volumetric clouds are Geometry Nodes volumes (`scene/atmosphere.py`):
+  the app's 72³ noise as the grid `density`, its relief term
+  `tex(p - 0.01) - tex(p + 0.01)` precomputed per voxel as the grid `shade`, and
+  an emission + absorption Principled Volume carried by a Set Material node in
+  each cloud's group (EEVEE 5.2 ignores a mesh object's own material slot for a
+  Geometry Nodes volume and draws it with the default grey shader). Two EEVEE
+  rules set their strength. A Geometry Nodes volume is an OBJECT-space volume,
+  whose coefficients EEVEE divides by |M n| (n the normalized diagonal; 82 for
+  a 105 x 90 x 33 m cloud): the shader works per unit of box length and puts
+  back three's step rate along the view ray, max_i(|u_i| / scale_i). And the
+  Principled Volume multiplies its absorption, not its emission, by the grid
+  in its Density Attribute (`density` by default), so that field is cleared.
+  Against the app's march run on the CPU over the same sky
+  (`blender/tests/trees2/cloud_probe.py` in eidoverse), one cloud close up adds
+  0.21 over the sky where the app's adds 0.18, and 0.28 against 0.25 seen from
+  the plant; before those two rules it added 0.012 and the clouds read as faint
+  smudges. Thin wisps stay a little brighter: three's transparent blend
+  multiplies the premultiplied march by its alpha once more.
 - The soundscape's wind bed strip carries √2: Blender pans a mono strip
   equal-power (−3 dB per channel at the centre), the app's unpanned bed plays
   at full level on both channels. The birds' exponential fades are keyed on
@@ -360,8 +401,3 @@ These are reported here for SeedThree main.
 - The GitHub fallback when no checkout is found (eidoverse's JS bridge imports
   the API from GitHub; the Blender edition needs a local checkout of this
   branch).
-- The demo's volumetric clouds as the app shows them: the cloud volumes carry
-  the app's emission + absorption recipe (a Set Material in their Geometry Nodes
-  group: EEVEE drew them with its default grey volume shader without it), but
-  EEVEE 5.2 brings them to the frame at a few percent of their expected
-  strength, so they read as faint smudges, not the app's white clouds.

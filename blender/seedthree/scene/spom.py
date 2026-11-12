@@ -16,7 +16,28 @@ five layer heights (+ the desert floor's) are packed into two RGBA images once p
 so a step reads two textures. Texture arrays become those packs; the albedo / normal /
 roughness layers are the separate images the inline terrain already uses.
 
+WHAT THE MARCH READS (heights='normals', the default; a departure from the app). The
+app's _height.png maps are streaky texel-scale noise that does not follow the stones,
+slabs and cracks their own albedo and normal maps show (the gravel floor's height has no
+pebbles in it at all), and the app marches them 0.035 rock tiles deep (25 cm) x the
+layer's push. At eye height that draws a bed of needles, here as in the app: reading the
+heights at LOD 0 as the JS does, or sampling the layers without mips, leaves the needles
+as they are. Real ground seen from standing height (desert pavement, caliche, scree:
+photographs of the Mojave and Death Valley pavements) is a nearly flat bed of embedded
+stones a few centimetres proud. So the default relief is integrated from each layer's
+own normal map (Frankot-Chellappa: the periodic height whose slopes best match the
+normals, so the tile stays seamless), high-passed (shapes wider than ~0.3 m are the
+terrain mesh's business) and normalized; its depth is the relief those slopes describe
+(the integrated range, in texels, over the tile's texels) x RELIEF. Six of the eleven
+ground normal maps integrate only as DirectX (green down) maps (integrability residual
+0.05-0.06 against 0.64-0.70 read as OpenGL); in this material those six are read with
+their green flipped, so the shading agrees with the relief (the inline material and the
+app read every map as OpenGL). The desert floor keeps its own 4 m tile here, as with SPOM
+off (the app's march reads it at the 7.27 m rock tile, so its stones grow 1.8x when the
+toggle goes on). heights='app' keeps the app's maps, depth, pushes and floor tile.
+
     mat = terrain.terrain_material('temperate', species, spom=True)
+    mat = spom.spom_terrain_material('desert', species, heights='app')     # the app's own
 """
 
 import bpy
@@ -32,6 +53,10 @@ FADE = (22.0, 90.0)   # full relief inside fadeNear, flat beyond fadeFar (metres
 MIN_VIEW_Z = 0.12
 SHADOW_STRENGTH = 8.0
 SHADOW_BIAS = 0.03
+RELIEF = 2.0          # heights='normals': depth = the normal maps' own relief x this
+RELIEF_HIGHPASS = 48.0   # texels (0.34 m at the rock tile): broader shapes are left to the mesh
+RELIEF_LOWPASS = 4.0     # texels (2.8 cm): finer grain is left to the normal map
+ROCK_TILE = 0.55         # rockUv = uv x 0.55: the rock layers tile every 7.27 m, the ground every 4 m
 
 
 class _T:
@@ -125,31 +150,110 @@ def layer_bases(biome):
     return ['rock', 'rock2', 'rock3', 'rock4', 'rock5'], 'grass'
 
 
-def packed_heights(biome='temperate', rock_base=None, ground_base=None, size=1024):
+def _resized(a, size):
+    h, w = a.shape[:2]
+    if (w, h) == (size, size):
+        return a
+    return a[(np.arange(size) * h // size)][:, (np.arange(size) * w // size)]
+
+
+def _integrate(gx, gy, highpass, lowpass):
+    """Frankot-Chellappa: the periodic height whose gradient is closest to (gx, gy) (slopes per
+    texel; x along the columns, y along the rows), band-passed (Gaussians: shapes wider than
+    `highpass` texels and grain finer than `lowpass` texels go), for both green conventions:
+    -> (height, residual, directx). The residual is the share of the slopes the height leaves
+    unexplained (Parseval: summed over frequencies); the convention with the smaller one wins
+    (OpenGL: gy as given; DirectX: -gy)."""
+    h, w = gx.shape
+    wx = (2 * np.pi * np.fft.fftfreq(w))[None, :]
+    wy = (2 * np.pi * np.fft.fftfreq(h))[:, None]
+    den = wx * wx + wy * wy
+    den[0, 0] = 1.0
+    P, Q = np.fft.fft2(gx), np.fft.fft2(gy)
+    total = float((np.abs(P) ** 2 + np.abs(Q) ** 2).sum())
+    fits = []
+    for dx, q in ((False, Q), (True, -Q)):
+        F = (-1j * wx * P - 1j * wy * q) / den
+        F[0, 0] = 0.0
+        resid = float(np.sqrt((np.abs(1j * wx * F - P) ** 2 + np.abs(1j * wy * F - q) ** 2).sum() / max(total, 1e-12)))
+        fits.append((resid, dx, F))
+    fits.sort(key=lambda f: f[0])
+    (resid, dx, F), (other, _, _) = fits
+    band = (1.0 - np.exp(-den * highpass * highpass / 2.0)) * np.exp(-den * lowpass * lowpass / 2.0)
+    return np.real(np.fft.ifft2(F * band)), resid, dx, other
+
+
+_RELIEF_CACHE = {}
+
+
+def relief_from_normals(base, size=1024, highpass=None, lowpass=None):
+    """A ground layer's relief integrated from its own normal map -> {'height': (size, size)
+    float32 0..1 (white = peak; rows bottom-up like bpy pixels), 'range': its 0.5..99.5 %
+    span in texels (the relief its slopes describe), 'directx': the map's green runs down,
+    'residual'}, or None without a normal map. The relief takes the green convention whose
+    slopes integrate better (OpenGL: green = -dh/dv; DirectX: +dh/dv); 'directx' is set only
+    when that fit is DirectX and at least twice as good. Band: RELIEF_HIGHPASS / RELIEF_LOWPASS
+    texels: the march carries the stones, slabs and cracks; the grain stays in the normal map."""
+    import os
+    highpass = RELIEF_HIGHPASS if highpass is None else highpass
+    lowpass = RELIEF_LOWPASS if lowpass is None else lowpass
+    key = (base, size, highpass, lowpass)
+    if key in _RELIEF_CACHE:
+        return _RELIEF_CACHE[key]
+    p = os.path.join(_api.ASSETS_DIR, 'ground', base + '_normal.png')
+    if not os.path.isfile(p):
+        return None
+    px, _ = _pixels(p)
+    n = _resized(px[..., :3].astype(np.float64), size) * 2.0 - 1.0
+    nz = np.maximum(n[..., 2], 0.25)
+    gx = -n[..., 0] / nz
+    gy_gl = -n[..., 1] / nz          # rows run up the v axis in bpy pixels
+    hp, resid, dx, other = _integrate(gx, gy_gl, highpass, lowpass)
+    lo, hi = np.percentile(hp, (0.5, 99.5))
+    # the relief takes the better fit either way; the map counts as DirectX (its green read
+    # flipped) only when that fit is clearly the better one
+    out = {'height': np.clip((hp - lo) / max(hi - lo, 1e-6), 0.0, 1.0).astype(np.float32),
+           'range': float(hi - lo), 'directx': bool(dx and resid < 0.5 * other), 'residual': resid}
+    _RELIEF_CACHE[key] = out
+    return out
+
+
+def packed_heights(biome='temperate', rock_base=None, ground_base=None, size=1024, source='normals'):
     """Two packed images (non-colour, channel-packed): A = heights of layers 0-3, B = (layer 4,
-    the ground's height, 0, 1); a missing map reads 128/255 like the JS's fallback. Made once
-    per file and packed into it."""
+    the ground's height, 0, 1), and per layer (the five, then the ground) its relief depth in
+    rock-tile units before RELIEF ('depth', 0 = the app's) and its normal map's convention
+    ('directx'), also kept on image A. source 'normals': relief_from_normals; 'app': the app's
+    _height.png maps (a missing map reads 128/255 like the JS's fallback). Made once per file
+    and packed into it. -> (images, info)"""
     import os
     layers, gbase = layer_bases(biome)
     if rock_base:
         layers[0] = rock_base
     gbase = ground_base or gbase
-    names = ('SeedThree SPOM heights %s A' % biome, 'SeedThree SPOM heights %s B' % biome)
+    tag = 'relief' if source == 'normals' else 'heights'
+    names = ('SeedThree SPOM %s %s A' % (tag, biome), 'SeedThree SPOM %s %s B' % (tag, biome))
     if all(bpy.data.images.get(n) is not None for n in names):
-        return [bpy.data.images[n] for n in names]
+        a = bpy.data.images[names[0]]
+        info = {'depth': list(a.get('seedthree_relief_depth', [0.0] * 6)),
+                'directx': [bool(v) for v in a.get('seedthree_relief_directx', [0] * 6)]}
+        return [bpy.data.images[n] for n in names], info
     d = os.path.join(_api.ASSETS_DIR, 'ground')
+    depth, directx = [], []
 
     def height(base):
+        if source == 'normals':
+            r = relief_from_normals(base, size)
+            if r is not None:
+                depth.append(r['range'] / size)
+                directx.append(r['directx'])
+                return r['height']
+        depth.append(0.0)
+        directx.append(False)
         p = os.path.join(d, base + '_height.png')
         if not os.path.isfile(p):
             return np.full((size, size), 128 / 255, np.float32)
-        px, (w, h) = _pixels(p)
-        r = px[..., 0]
-        if (w, h) != (size, size):
-            ys = (np.arange(size) * h // size)
-            xs = (np.arange(size) * w // size)
-            r = r[ys][:, xs]
-        return r
+        px, _ = _pixels(p)
+        return _resized(px[..., 0], size)
     hs = [height(b) for b in layers] + [height(gbase)]
     packs = (np.stack(hs[0:4], axis=2), np.stack([hs[4], hs[5], np.zeros_like(hs[4]), np.ones_like(hs[4])], axis=2))
     out = []
@@ -161,7 +265,9 @@ def packed_heights(biome='temperate', rock_base=None, ground_base=None, size=102
         img.update()
         img.pack()
         out.append(img)
-    return out
+    out[0]['seedthree_relief_depth'] = depth
+    out[0]['seedthree_relief_directx'] = [int(v) for v in directx]
+    return out, {'depth': depth, 'directx': directx}
 
 
 # ---- node groups ------------------------------------------------------------------------
@@ -178,11 +284,15 @@ def _new_group(name, inputs, outputs):
     return ng, True
 
 
-def height_group(biome, packs):
+def height_group(biome, packs, tag='', ground_tile=1.0):
     """Height(Coord): the dominant layer's height (one-hot H1 = o0..o2, H2 = (o3, o4, w)); the
-    desert blends the floor's height under it by rockness w."""
-    ng, fresh = _new_group('SeedThree SPOM height %s' % biome, [('Coord', 'NodeSocketVector'), ('H1', 'NodeSocketVector'),
-                                                               ('H2', 'NodeSocketVector')], [('Height', 'NodeSocketFloat')])
+    desert blends the floor's height under it by rockness w, read at Coord x ground_tile (the
+    app reads it at the rock tile, 1; the relief material at the floor's own, 1 / 0.55). tag:
+    the packs' source, so the app's heights and the relief keep separate groups."""
+    ng, fresh = _new_group('SeedThree SPOM height %s%s' % (biome, tag), [('Coord', 'NodeSocketVector'),
+                                                                        ('H1', 'NodeSocketVector'),
+                                                                        ('H2', 'NodeSocketVector')],
+                           [('Height', 'NodeSocketFloat')])
     if not fresh:
         return ng
     t = _T(ng)
@@ -199,15 +309,23 @@ def height_group(biome, packs):
     t.link(b.outputs['Color'], bsep.inputs[0])
     rock = t.math('ADD', t.vmath('DOT_PRODUCT', a.outputs['Color'], gin.outputs['H1']),
                   t.math('ADD', t.math('MULTIPLY', a.outputs['Alpha'], h2[0]), t.math('MULTIPLY', bsep.outputs[0], h2[1])))
-    h = t.mixf(bsep.outputs[1], rock, h2[2]) if biome == 'desert' else rock
+    ground = bsep.outputs[1]
+    if biome == 'desert' and ground_tile != 1.0:
+        g = t.node('ShaderNodeTexImage', interpolation='Linear', extension='REPEAT')
+        g.image = packs[1]
+        t.link(t.vmath('SCALE', gin.outputs['Coord'], None, scale=ground_tile), g.inputs['Vector'])
+        gsep = t.node('ShaderNodeSeparateColor')
+        t.link(g.outputs['Color'], gsep.inputs[0])
+        ground = gsep.outputs[1]
+    h = t.mixf(ground, rock, h2[2]) if biome == 'desert' else rock
     t.link(h, gout.inputs['Height'])
     return ng
 
 
-def step_group(biome, hg):
+def step_group(biome, hg, tag=''):
     """One march step: stop once the layer depth reaches the surface depth, else step the
     UV by -DeltaUV, the layer depth by LStep and read the depth there."""
-    ng, fresh = _new_group('SeedThree SPOM step %s' % biome,
+    ng, fresh = _new_group('SeedThree SPOM step %s%s' % (biome, tag),
                            [('UV', 'NodeSocketVector'), ('LD', 'NodeSocketFloat'), ('Depth', 'NodeSocketFloat'),
                             ('Done', 'NodeSocketFloat'), ('DeltaUV', 'NodeSocketVector'), ('LStep', 'NodeSocketFloat'),
                             ('H1', 'NodeSocketVector'), ('H2', 'NodeSocketVector')],
@@ -230,10 +348,10 @@ def step_group(biome, hg):
     return ng
 
 
-def shadow_group(biome, hg):
+def shadow_group(biome, hg, tag=''):
     """One step of the march toward the sun: rise, read the height, keep the strongest
     proximity-weighted blocker."""
-    ng, fresh = _new_group('SeedThree SPOM shadow %s' % biome,
+    ng, fresh = _new_group('SeedThree SPOM shadow %s%s' % (biome, tag),
                            [('UV', 'NodeSocketVector'), ('RH', 'NodeSocketFloat'), ('Prox', 'NodeSocketFloat'),
                             ('Occ', 'NodeSocketFloat'), ('StepUV', 'NodeSocketVector'), ('Rise', 'NodeSocketFloat'),
                             ('InvSteps', 'NodeSocketFloat'), ('H1', 'NodeSocketVector'), ('H2', 'NodeSocketVector')],
@@ -274,13 +392,17 @@ def dominant_onehot(t, weights):
     return one
 
 
-def march(t, biome, rock_uv, weights, rockness, packs, sun_dir, depth_push=None):
+def march(t, biome, rock_uv, weights, rockness, packs, sun_dir, depth_push=None, depth_of=None, tag='',
+          ground_tile=1.0):
     """Build the SPOM march in material tree helper `t`.
     rock_uv: the rock-tile UV (vector socket); weights: the five layer weights; rockness: w;
-    sun_dir: world direction toward the sun (vector socket). -> (marched UV socket, lit socket)."""
-    hg = height_group(biome, packs)
-    sg = step_group(biome, hg)
-    shg = shadow_group(biome, hg)
+    sun_dir: world direction toward the sun (vector socket); depth_of(one): the relief depth
+    in rock-tile units at the dominant layer (default: the app's DEPTH x depth_push(one));
+    tag: the packs' source (keeps their node groups apart); ground_tile: height_group's.
+    -> (marched UV socket, lit socket)."""
+    hg = height_group(biome, packs, tag, ground_tile)
+    sg = step_group(biome, hg, tag)
+    shg = shadow_group(biome, hg, tag)
     one = dominant_onehot(t, weights)
     H1 = t.combine(one[0], one[1], one[2])
     H2 = t.combine(one[3], one[4], rockness)
@@ -299,12 +421,16 @@ def march(t, biome, rock_uv, weights, rockness, packs, sun_dir, depth_push=None)
     absz = t.math('ABSOLUTE', vt[2])
     layers = t.mixf(float(STEPS), float(MIN_LAYERS), t.math('MINIMUM', t.math('MAXIMUM', absz, 0.0), 1.0))
     lstep = t.math('DIVIDE', 1.0, layers)
-    # relief depth: 0.035 x the layer push x (desert: 1, temperate: rockness) x the distance fade
+    # relief depth: the layer's depth (the app's: 0.035 x its push) x (desert: 1, temperate:
+    # rockness) x the distance fade
     cam = t.node('ShaderNodeCameraData')
     fade = t.math('SUBTRACT', 1.0, _smooth(t, cam.outputs['View Distance'], FADE[0], FADE[1]))
-    scale = t.math('MULTIPLY', DEPTH, fade)
-    if depth_push is not None:
-        scale = t.math('MULTIPLY', scale, depth_push(one))
+    if depth_of is not None:
+        scale = t.math('MULTIPLY', depth_of(one), fade)
+    else:
+        scale = t.math('MULTIPLY', DEPTH, fade)
+        if depth_push is not None:
+            scale = t.math('MULTIPLY', scale, depth_push(one))
     if biome != 'desert':
         scale = t.math('MULTIPLY', scale, rockness)
     shift = t.vmath('SCALE', t.combine(vt[0], vt[1], 0.0), None,
@@ -355,25 +481,44 @@ DESERT_DEPTH_SCALE = [1.3, 0.6, 1.0, 1.4, 0.5]                           # main.
 DESERT_GROUND_DEPTH = 0.4
 
 
-def spom_terrain_material(biome='temperate', species=None):
+def spom_terrain_material(biome='temperate', species=None, heights='normals', relief=RELIEF):
     """The app's v2 terrain material with SPOM on: the five rock layers splatted by the same
     brush-sharpened selectors, sampled at the parallax-marched UV, darkened by the relief's
     self-shadow toward the sun (lit x 0.7 + 0.3), blended normals, roughness from each layer's
-    own map. Temperate grass stays flat; the desert's gravel floor parallaxes too (its push
-    0.4, the layers' 1.3 / 0.6 / 1.0 / 1.4 / 0.5)."""
+    own map. Temperate grass stays flat; the desert's gravel floor parallaxes too.
+    heights 'normals' (default): the march reads each layer's relief integrated from its
+    normal map, as deep as those slopes describe x `relief`, and the DirectX-convention normal
+    maps are read with their green flipped (module docstring). heights 'app': the app's
+    _height.png maps, 0.035 rock tiles deep x the app's pushes (desert floor 0.4, layers
+    1.3 / 0.6 / 1.0 / 1.4 / 0.5), every normal map as OpenGL: the app's own look, needles and all."""
     from .terrain import _img, _lin
     from ..bl.sun import sun_group
     desert = biome == 'desert'
+    app = heights == 'app'
     sp = species or {}
     gbase = (sp.get('groundTexture') or ('desert_ground_albedo.png' if desert else 'grass_albedo.png')).replace('_albedo.png', '')
     rbase = (sp.get('rockTexture') or ('desert_rock_albedo.png' if desert else 'rock_albedo.png')).replace('_albedo.png', '')
-    name = 'ST terrain %s SPOM' % biome
+    if app:
+        name = 'ST terrain %s SPOM app heights' % biome
+    else:
+        name = 'ST terrain %s SPOM relief' % biome + ('' if relief == RELIEF else ' x%g' % relief)
     mat = bpy.data.materials.get(name)
     if mat is not None:
         return mat
     layers, _ = layer_bases(biome)
     layers[0] = rbase
-    packs = packed_heights(biome, rbase, gbase)
+    packs, info = packed_heights(biome, rbase, gbase, source='app' if app else 'normals')
+    tag = ' app' if app else ' relief'
+    if app:
+        depths = [DEPTH * s for s in (DESERT_DEPTH_SCALE if desert else [1.0] * 5)] + [DEPTH * DESERT_GROUND_DEPTH]
+        flips = [False] * 6
+        ground_tile = 1.0          # the app marches the desert floor at the rock tile
+    else:
+        # the desert floor keeps its own 4 m tile (as with SPOM off): its relief, read at
+        # rock_uv / 0.55, is 0.55 x as deep in rock-tile units
+        depths = [d * relief for d in info['depth'][:5]] + [info['depth'][5] * relief * ROCK_TILE]
+        flips = list(info['directx'])
+        ground_tile = 1.0 / ROCK_TILE
     mat = bpy.data.materials.new(name)
     mat.use_nodes = True
     mat.node_tree.nodes.clear()
@@ -419,18 +564,23 @@ def spom_terrain_material(biome='temperate', species=None):
           t.math('MULTIPLY', vs[1], t.math('MULTIPLY', k[2], k[3])),
           t.math('MULTIPLY', vs[2], k[3]),
           vs[3]]
-    rock_uv = uv_at(0.55)
+    rock_uv = uv_at(ROCK_TILE)
     sun = t.node('ShaderNodeGroup')
     sun.node_tree = sun_group()
 
-    def push(one):
-        if not desert:
-            return 1.0
-        r = 0.0
-        for o, d in zip(one, DESERT_DEPTH_SCALE):
-            r = t.math('MULTIPLY_ADD', o, d, r) if not isinstance(r, float) else t.math('MULTIPLY', o, d)
-        return t.mixf(DESERT_GROUND_DEPTH, r, w)
-    puv, lit = march(t, biome, rock_uv, wl, w, packs, sun.outputs[0], depth_push=push)
+    def depth_of(one):
+        """the dominant layer's relief depth (rock-tile units); the desert mixes the floor's
+        under it by rockness"""
+        r = None
+        for o, d in zip(one, depths[:5]):
+            r = t.math('MULTIPLY', o, d) if r is None else t.math('MULTIPLY_ADD', o, d, r)
+        return t.mixf(depths[5], r, w) if desert else r
+    puv, lit = march(t, biome, rock_uv, wl, w, packs, sun.outputs[0], depth_of=depth_of, tag=tag,
+                     ground_tile=ground_tile)
+
+    def green_down(nrm, flip):
+        """a DirectX-convention normal sample read as OpenGL: green -> 1 - green"""
+        return t.vmath('MULTIPLY_ADD', nrm, (1.0, -1.0, 1.0), (0.0, 1.0, 0.0)) if flip else nrm
     tints = [(1, 0)] * 5 if desert else LAYER_TINT
     rough_remap = [1] * 5 if desert else LAYER_ROUGH_REMAP
     rock_col = rock_n = rock_r = None
@@ -442,7 +592,7 @@ def spom_terrain_material(biome='temperate', species=None):
         mul, add = tints[i]
         if (mul, add) != (1, 0):
             col = t.vmath('MULTIPLY_ADD', col, (mul,) * 3, (add,) * 3)
-        nrm = tex(n, puv).outputs['Color'] if n else (0.5, 0.5, 1.0)
+        nrm = green_down(tex(n, puv).outputs['Color'], flips[i]) if n else (0.5, 0.5, 1.0)
         if r:
             sep = t.node('ShaderNodeSeparateColor')
             t.link(tex(r, puv).outputs['Color'], sep.inputs[0])
@@ -461,16 +611,19 @@ def spom_terrain_material(biome='temperate', species=None):
         sep = t.node('ShaderNodeSeparateColor')
         t.link(tex(rA, uv_at(0.11)).outputs['Color'], sep.inputs[0])
         macro = t.math('MULTIPLY_ADD', sep.outputs[0], 0.8, 0.58)
-    g_uv = puv if desert else uv
+    g_uv = (puv if ground_tile == 1.0 else t.vmath('SCALE', puv, None, scale=ground_tile)) if desert else uv
     gA, gN = _img(gbase + '_albedo.png', False), _img(gbase + '_normal.png', True)
     grass = tex(gA, g_uv).outputs['Color'] if gA else (*_lin(0x335926), )
     base_col = t.mixv(grass, t.vmath('SCALE', rock_col, None, scale=macro), w)
     t.link(t.vmath('SCALE', base_col, None, scale=t.math('MULTIPLY_ADD', lit, 0.7, 0.3)), bsdf.inputs['Base Color'])
-    nmix = t.mixv(tex(gN, g_uv).outputs['Color'], rock_n, w) if gN else rock_n
+    g_nrm = green_down(tex(gN, g_uv).outputs['Color'], desert and flips[5]) if gN else None
+    nmix = t.mixv(g_nrm, rock_n, w) if gN else rock_n
     nm = t.node('ShaderNodeNormalMap', space='TANGENT', uv_map='UVMap')
     t.link(nmix, nm.inputs['Color'])
     t.link(nm.outputs['Normal'], bsdf.inputs['Normal'])
     rr = rock_r if isinstance(rock_r, float) else t.math('MINIMUM', t.math('MAXIMUM', t.math('MULTIPLY', rock_r, rough_remap[0]), 0.0), 1.0)
     t.link(t.mixf(0.88, rr, w) if not isinstance(rr, float) else t.mixf(0.88, rr, w), bsdf.inputs['Roughness'])
     mat['seedthree_spom'] = True
+    mat['seedthree_spom_heights'] = heights
+    mat['seedthree_spom_depths_m'] = [d * 4.0 / ROCK_TILE for d in depths]    # the rock tile is 4 m / 0.55
     return mat

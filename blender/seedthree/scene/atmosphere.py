@@ -4,15 +4,23 @@ ring haze (main.js's TSL fog node).
 Clouds: the JS raymarches a 72^3 Perlin-noise density texture (three's ImprovedNoise,
 spherical falloff) inside a few scaled boxes, unlit: each step adds
 smoothstep(threshold +- range, density) x opacity of a colour shaded by the noise
-gradient along the diagonal and a vertical ramp, plus the cloud tint. Here the same
-texture becomes a Blender volume grid (Geometry Nodes: Volume Cube over the noise
-values, one cube per cloud at the app's hashed place and size) with an emission +
-absorption volume shader reading it: the same density, threshold, opacity and colour
-recipe, integrated by EEVEE's volume pass. (three's transparent blending multiplies the
-premultiplied march by its alpha once more; EEVEE integrates once, so thin wisps
-read a little brighter.) Measured in EEVEE 5.2, the cloud volumes reach the frame at a few
-percent of that strength (a white-dense core adds about 1 % over the sky; the volume range
-and slice count change nothing), so the clouds read as faint smudges: not yet the app's.
+difference along the box diagonal (3 x shade) and a ramp (x + y) 0.25 + 0.2, plus the
+cloud tint. Here the same texture becomes a Blender volume (Geometry Nodes: a Volume
+Cube over the noise values, one cube per cloud at the app's hashed place and size, and
+a second grid 'shade' holding the JS's diagonal difference per voxel) with an emission +
+absorption volume shader reading both grids: the same density, threshold, opacity and
+colour recipe, integrated by EEVEE's volume pass. Two EEVEE rules decide its strength.
+A Geometry Nodes volume is an OBJECT-space volume: EEVEE divides its coefficients by
+|M n| (n the normalized box diagonal, 82 for a 105 x 90 x 33 m cloud), so the shader
+works per unit of box length and multiplies that factor back where the JS's step rate
+needs it. And the Principled Volume multiplies its absorption (not its emission) by the
+grid named in its Density Attribute ('density' by default): the shader computes the
+density itself, so that attribute is cleared. Measured against the app's march run on
+the CPU over the same sky (eidoverse's blender/tests/trees2/cloud_probe.py): one cloud
+close up adds 0.21 over the sky where the app's adds 0.18 (seen from the plant, 0.28
+against 0.25); before these two rules were kept it added 0.012. (three's transparent
+blending multiplies the premultiplied march by its alpha once more; EEVEE integrates
+once, so thin wisps read a little brighter.)
 
 Haze: density from WORLD position, pooling toward the terrain rim and hugging low
 altitude, plus a hard wall over the last ~30 m: factor = smoothstep(start, start + 140,
@@ -33,24 +41,48 @@ import numpy as np
 from ..core.cloud_noise import improved_noise, cloud_noise, cloud_placements  # noqa: F401
 
 
+def shade_values(data, size):
+    """clouds.js's relief term at every voxel centre, x fastest like the noise:
+    tex(p - 0.01) - tex(p + 0.01), read the way the JS reads it. Its density read adds 0.5 to
+    the box coordinate p (-0.5..0.5); this one does not, so three's clamp-to-edge makes the
+    reads in the box's lower half along an axis take the texture's first texel there. The
+    texture is a LinearFilter Data3DTexture: trilinear, texel centres at (i + 0.5) / size."""
+    tex = data.astype(np.float32).reshape(size, size, size) / 255.0        # [z, y, x]
+    i = np.arange(size, dtype=np.float32)
+
+    def read(off):
+        q = np.clip(i - size / 2 + off, 0, size - 1)        # texel coordinate of p + off / size
+        i0 = np.minimum(np.floor(q).astype(np.int64), size - 2)
+        f = q - i0
+        t = tex[:, :, i0] * (1 - f) + tex[:, :, i0 + 1] * f
+        t = t[:, i0, :] * (1 - f)[None, :, None] + t[:, i0 + 1, :] * f[None, :, None]
+        return t[i0] * (1 - f)[:, None, None] + t[i0 + 1] * f[:, None, None]
+    o = 0.01 * size
+    return (read(-o) - read(o)).astype(np.float32).ravel()
+
+
 def _cloud_volume_group(size, data):
     """GN: a Volume Cube over the unit box whose density samples the noise points by voxel index,
-    with a Set Material node ('Set Cloud Material'; build_clouds gives each cloud a copy of the
-    group carrying its own material): EEVEE 5.2 renders a Geometry Nodes volume on a mesh
-    object with its default volume shader unless the volume carries a material (measured:
-    the object's own slot was ignored, the cloud drew as a grey smudge)."""
+    a second cube sampling the JS's shade term, stored into the first as the grid 'shade'
+    ('Store Shade Grid'), and a Set Material node ('Set Cloud Material'; build_clouds gives
+    each cloud a copy of the group carrying its own material): EEVEE 5.2 renders a Geometry
+    Nodes volume on a mesh object with its default volume shader unless the volume carries a
+    material (measured: the object's own slot was ignored, the cloud drew as a grey smudge)."""
     name = 'SeedThree Cloud Volume'
     ng = bpy.data.node_groups.get(name)
-    if ng is not None and 'Set Cloud Material' in ng.nodes:
+    if ng is not None and 'Store Shade Grid' in ng.nodes:
         return ng
     if ng is not None:
         ng.name = name + ' (old)'
-    # the noise as a point cloud mesh with a 'noise' attribute (0..1), in x-fastest order
+    # the noise as a point cloud mesh with a 'noise' attribute (0..1) and the shade term, in
+    # x-fastest order
     me = bpy.data.meshes.new('SeedThree cloud noise')
     me.vertices.add(len(data))
     me['seedthree_size'] = size
     at = me.attributes.new('noise', 'FLOAT', 'POINT')
     at.data.foreach_set('value', (data.astype(np.float32) / 255.0))
+    at = me.attributes.new('shade', 'FLOAT', 'POINT')
+    at.data.foreach_set('value', shade_values(data, size))
     me.update()
     src = bpy.data.objects.new('SeedThree cloud noise', me)
     src.hide_render = True
@@ -97,28 +129,54 @@ def _cloud_volume_group(size, data):
     l2.inputs[1].default_value = size
     L.new(ix, l2.inputs[2])
     L.new(l2.outputs[0], lin.inputs[2])
-    attr = N.new('GeometryNodeInputNamedAttribute')
-    attr.data_type = 'FLOAT'
-    attr.inputs['Name'].default_value = 'noise'
-    si = N.new('GeometryNodeSampleIndex')
-    si.data_type = 'FLOAT'
-    si.domain = 'POINT'
-    L.new(oi.outputs['Geometry'], si.inputs['Geometry'])
-    L.new(attr.outputs[0], si.inputs['Value'])
-    L.new(lin.outputs[0], si.inputs['Index'])
-    L.new(si.outputs[0], cube.inputs['Density'])
+    def sampled(attr_name, into):
+        attr = N.new('GeometryNodeInputNamedAttribute')
+        attr.data_type = 'FLOAT'
+        attr.inputs['Name'].default_value = attr_name
+        si = N.new('GeometryNodeSampleIndex')
+        si.data_type = 'FLOAT'
+        si.domain = 'POINT'
+        L.new(oi.outputs['Geometry'], si.inputs['Geometry'])
+        L.new(attr.outputs[0], si.inputs['Value'])
+        L.new(lin.outputs[0], si.inputs['Index'])
+        L.new(si.outputs[0], into.inputs['Density'])
+    sampled('noise', cube)
+    # the shade term on the same voxels: a second cube's grid, stored into the first as 'shade'
+    cube2 = N.new('GeometryNodeVolumeCube')
+    for k in ('Resolution X', 'Resolution Y', 'Resolution Z'):
+        cube2.inputs[k].default_value = size
+    cube2.inputs['Min'].default_value = (-0.5, -0.5, -0.5)
+    cube2.inputs['Max'].default_value = (0.5, 0.5, 0.5)
+    sampled('shade', cube2)
+    get = N.new('GeometryNodeGetNamedGrid')
+    get.data_type = 'FLOAT'
+    get.inputs['Name'].default_value = 'density'
+    L.new(cube2.outputs[0], get.inputs['Volume'])
+    store = N.new('GeometryNodeStoreNamedGrid')
+    store.data_type = 'FLOAT'
+    store.name = store.label = 'Store Shade Grid'
+    store.inputs['Name'].default_value = 'shade'
+    L.new(cube.outputs[0], store.inputs['Volume'])
+    L.new(get.outputs['Grid'], store.inputs['Grid'])
     sm = N.new('GeometryNodeSetMaterial')
     sm.name = sm.label = 'Set Cloud Material'
-    L.new(cube.outputs[0], sm.inputs['Geometry'])
+    L.new(store.outputs[0], sm.inputs['Geometry'])
     L.new(sm.outputs[0], gout.inputs[0])
     return ng
 
 
-def cloud_material(tint=0xe6eef7, range_=0.16, threshold=0.30, opacity=0.13, steps=60, name='SeedThree clouds'):
-    """The raymarch recipe as an emission + absorption volume: per unit-box length the
-    step alpha a = smoothstep(threshold +- range, density) x opacity becomes absorption
-    -ln(1 - a) x steps, and emits that absorption x (gradient shading x 3 + (x + y) 0.25 +
-    0.2 + tint)."""
+def cloud_material(tint=0xe6eef7, range_=0.16, threshold=0.30, opacity=0.13, steps=60, name='SeedThree clouds v2'):
+    """The raymarch recipe as an emission + absorption volume. Each JS step takes
+    a = smoothstep(threshold +- range, density) x opacity of what is left and adds that share
+    of col = 3 x shade + (x + y) 0.25 + 0.2 (+ the tint). As a continuous medium that is an
+    absorption of -ln(1 - a) per step, and three's RaymarchingBox takes `steps` x max_i |d_i|
+    steps per unit of box length (d the ray's direction in box space), which per metre along
+    a world ray u is -ln(1 - a) x steps x max_i(|u_i| / scale_i). EEVEE divides an OBJECT-space
+    volume's coefficients by |M n| (n = the normalized (1, 1, 1)), so the shader computes
+    -ln(1 - a) x steps x max_i(|u_i| x 'Ray Scale'_i), with Ray Scale = |M n| / scale per
+    cloud (build_clouds sets it), and emits that absorption x col. The Principled Volume's
+    Density Attribute is cleared: it would multiply the absorption (not the emission) by the
+    density grid once more."""
     m = bpy.data.materials.get(name)
     if m is not None:
         return m
@@ -154,35 +212,52 @@ def cloud_material(tint=0xe6eef7, range_=0.16, threshold=0.30, opacity=0.13, ste
     a = math('MULTIPLY', mr.outputs['Result'], opacity)
     sigma = math('MULTIPLY', math('MULTIPLY', math('LOGARITHM', math('SUBTRACT', 1.0, a), 2.718281828459045), -1.0),
                  float(steps))
-    # the unit box is scaled per cloud: world density = unit density / the object's mean scale
+    # three's step rate along the view ray u (the world view direction; the clouds are not
+    # rotated), with EEVEE's OBJECT-space 1 / |M n| undone: max_i(|u_i| x Ray Scale_i)
+    geo = N.new('ShaderNodeNewGeometry')
+    absu = N.new('ShaderNodeVectorMath')
+    absu.operation = 'ABSOLUTE'
+    L.new(geo.outputs['Incoming'], absu.inputs[0])
+    rs = N.new('ShaderNodeCombineXYZ')
+    rs.name = rs.label = 'Ray Scale'
+    for i in range(3):
+        rs.inputs[i].default_value = 1.0
+    per_axis = N.new('ShaderNodeVectorMath')
+    per_axis.operation = 'MULTIPLY'
+    L.new(absu.outputs[0], per_axis.inputs[0])
+    L.new(rs.outputs[0], per_axis.inputs[1])
+    su = N.new('ShaderNodeSeparateXYZ')
+    L.new(per_axis.outputs[0], su.inputs[0])
+    rate = math('MAXIMUM', math('MAXIMUM', su.outputs['X'], su.outputs['Y']), su.outputs['Z'])
+    sig = math('MULTIPLY', sigma, rate)
+    # colour: 3 x shade + (positionRay.x + positionRay.y) x 0.25 + 0.2 in the box's own frame
+    # (three y = Blender Z), + the tint
     tc = N.new('ShaderNodeTexCoord')
     sep = N.new('ShaderNodeSeparateXYZ')
     L.new(tc.outputs['Object'], sep.inputs[0])
-    # (positionRay.x + positionRay.y) x 0.25 + 0.2 in the box's own frame (three y = Blender Z).
-    # The JS also adds 3 x the noise's difference along the box diagonal; a volume shader reads
-    # its grid only at the sample point, so that relief term is left out.
+    shade = N.new('ShaderNodeAttribute')
+    shade.attribute_type = 'GEOMETRY'
+    shade.attribute_name = 'shade'
     ramp = math('MULTIPLY', math('ADD', sep.outputs['X'], sep.outputs['Z']), 0.25)
-    col_v = math('ADD', ramp, 0.2)
+    col_v = math('ADD', math('ADD', ramp, 0.2), math('MULTIPLY', shade.outputs['Fac'], 3.0))
     tint_lin = srgb_to_linear_hex(tint)
     cmb = N.new('ShaderNodeCombineXYZ')
     for i in range(3):
         L.new(math('ADD', col_v, tint_lin[i]), cmb.inputs[i])
-    scl = N.new('ShaderNodeValue')
-    scl.name = scl.label = 'Box Scale'
-    scl.outputs[0].default_value = 60.0
-    sig_w = math('DIVIDE', sigma, scl.outputs[0])
     vol = N.new('ShaderNodeVolumePrincipled')
     vol.inputs['Color'].default_value = (0, 0, 0, 1)
-    L.new(sig_w, vol.inputs['Density'])
+    vol.inputs['Density Attribute'].default_value = ''
+    L.new(sig, vol.inputs['Density'])
     vol.inputs['Absorption Color'].default_value = (0, 0, 0, 1)
     L.new(cmb.outputs[0], vol.inputs['Emission Color'])
-    L.new(sig_w, vol.inputs['Emission Strength'])
+    L.new(sig, vol.inputs['Emission Strength'])
     L.new(vol.outputs[0], out.inputs['Volume'])
     return m
 
 
 def build_clouds(count=5, size=72, spread=55, altitude=70, tint=0xe6eef7, collection=None):
-    """buildVolumetricClouds: `count` cloud boxes at the app's hashed places and sizes."""
+    """buildVolumetricClouds: `count` cloud boxes at the app's hashed places and sizes. Each
+    cloud's material carries its box's Ray Scale, so a cloud rescaled later needs a rebuild."""
     data = cloud_noise(size)
     ng = _cloud_volume_group(size, data)
     mat = cloud_material(tint)
@@ -196,7 +271,10 @@ def build_clouds(count=5, size=72, spread=55, altitude=70, tint=0xe6eef7, collec
         w, h, d = c['scale']
         ob.scale = (w, d, h)
         m = mat.copy()
-        m.node_tree.nodes['Box Scale'].outputs[0].default_value = (w * h * d) ** (1 / 3)
+        mn = math.sqrt((w * w + d * d + h * h) / 3.0)          # |M n| of the box's scale
+        rs = m.node_tree.nodes['Ray Scale']
+        for k, s in enumerate((w, d, h)):
+            rs.inputs[k].default_value = mn / s
         ob.data.materials.append(m)
         ngi = ng.copy()                    # this cloud's volume carries its own material
         ngi.name = '%s %d' % (ng.name, i)
